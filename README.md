@@ -8,9 +8,9 @@
 ```
 Astra
 
-> 为 Realme GT7 Pro 定制的模块，功能为温控·电池·调度相关。私人定制切勿分享。
+> 为 Realme GT7 Pro 定制的模块，功能为温控·电池·调度相关。
 >
-> 正在通过Deepseek编写一款专为GT7 Pro的工具箱,会将把模块内所有功能移植到APP内,并持续更新!
+> 正在通过Deepseek编写一款专为GT7 Pro的工具箱APP 名叫Astra For GT,会将把模块内所有功能移植到APP内,并持续更新!
 
 
 ## 三种模式
@@ -26,12 +26,12 @@ Astra
 - **官调限频**：走 `msm_performance/parameters/cpu_max_freq`，每 4 秒重压一次（perf HAL 会回抬）。
 - **自动让出**：游戏中 / Scene 接管当前前台应用时，立即恢复官方上限。
 - **GPU Boost**：独立开关；官调限频开启时强制开。
-- **耗电统计**：最多 3 条，名称 + 占比条 + mAh + 时长；右上角平均功耗（batterystats 折算，后台刷新）。
+- **耗电统计**：Coming Soon on Astra APP
 
 
 ## 安装 / 卸载
 
-1. `Astra-Beta0.1.09.zip` → SukiSU → 模块 → 从本地安装
+1. `Astra.zip` → SukiSU → 模块 → 从本地安装
 2. **重启**
 3. SukiSU → 模块 → Astra → 打开
 
