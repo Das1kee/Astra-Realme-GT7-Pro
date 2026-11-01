@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Astra</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="bg"></div>
+
+<main id="stage">
+  <header class="top">
+    <div>
+      <div class="mark">ASTRA</div>
+      <div class="greet" id="greet">你好</div>
+    </div>
+    <button class="refresh" id="refresh" aria-label="refresh">
+      <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.6h-4.6"/></svg>
+    </button>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <!-- 温控 -->
+  <section class="page" id="p-thermal">
+    <div class="card hero">
+      <div class="row">
+        <span class="label" data-i18n="prefix">系统可见温度</span>
+        <span class="pill" id="tmode">官方温控</span>
+      </div>
+      <div class="big"><span id="tbig">—</span><i>°C</i></div>
+      <div class="hint" id="thint">官方温控，模块不介入</div>
+      <div class="pair">
+        <div><span data-i18n="realb">真实电池</span><b id="rbatt">—</b></div>
+        <div><span data-i18n="reals">真实 SoC</span><b id="rsoc">—</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <span class="label" data-i18n="mode">温控模式</span>
+      <div class="seg" id="mode">
+        <button data-m="official" data-i18n="official">官方温控</button>
+        <button data-m="off" data-i18n="off">GT去温控</button>
+        <button data-m="mask" data-i18n="mask">温度伪装</button>
+      </div>
+      <div class="hint" data-i18n="only1">三种模式互斥，切换即时生效。</div>
+    </div>
+
+    <div class="card" id="maskCard" hidden>
+      <div class="row"><span class="label" data-i18n="maskt">温度伪装</span><span class="tag" id="maskTag">未启用</span></div>
+      <div class="row between mt">
+        <span class="sub" data-i18n="see">系统看到</span><b id="maskVal">26.6°</b>
+      </div>
+      <input class="range" id="maskBase" type="range" min="200" max="350" step="1" value="266">
+      <div class="scale"><span>20.0°</span><span>35.0°</span></div>
+
+      <div class="switchrow" data-k="RAISE_WALL">
+        <div><div class="t" data-i18n="wall">拉高真实温控墙</div><div class="s" data-i18n="wall_s">两条熔断线整体上移 3℃</div></div>
+        <i class="sw"></i>
+      </div>
+      <div class="fuse">
+        <span><span data-i18n="fb">电池熔断</span> <b id="fuseB">45.0°</b></span>
+        <span><span data-i18n="fs">SoC 熔断</span> <b id="fuseS">95.0°</b></span>
+      </div>
+    </div>
+
+    <div class="card" id="offCard" hidden>
+      <span class="label" data-i18n="offt">GT去温控</span>
+      <p class="desc" data-i18n="offd">替换厂商温控策略表，关闭软降级；硬件过温关机保护始终保留。</p>
+      <div class="devrow"><span data-i18n="patch">补丁状态</span><b id="offState">未挂载</b></div>
+    </div>
+  </section>
+
+  <!-- 电池 -->
+  <section class="page" id="p-battery" hidden>
+    <div class="card hero">
+      <div class="row"><span class="label" data-i18n="pw">充电功率</span><span class="pill" id="cstate">未充电</span></div>
+      <div class="big"><span id="cw">0.0</span><i>W</i></div>
+      <div class="hint" id="chint">未连接充电器</div>
+      <div class="pair">
+        <div><span data-i18n="dur">充电时长</span><b id="ctime">—</b></div>
+        <div><span data-i18n="btemp">电池温度</span><b id="ctemp">—</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="switchrow" data-k="CHARGE_AUTO">
+        <div><div class="t" data-i18n="autot">每次充电自动满血</div><div class="s" data-i18n="autos">插电接管，拔线还原</div></div>
+        <i class="sw"></i>
+      </div>
+      <button class="btn" id="chargeNow" data-i18n="nowbtn">本次充电满血</button>
+      <div class="notice" id="cnotice" hidden data-i18n="notice">当前充电已开启满血充电</div>
+      <div class="row between mt"><span class="sub" data-i18n="cut">温度保护线</span><b id="cutVal">45°</b></div>
+      <input class="range" id="cut" type="range" min="43" max="48" step="1" value="45">
+      <div class="hint" data-i18n="cuth">旁路充电或到达保护线时自动切回官方策略。</div>
+    </div>
+
+    <div class="card grid">
+      <div><span data-i18n="remain">剩余电量</span><b id="remain">—</b></div>
+      <div><span data-i18n="percent">电量百分比</span><b id="percent">—</b></div>
+      <div><span data-i18n="health">电池健康</span><b id="health">—</b></div>
+      <div><span data-i18n="cycle">循环次数</span><b id="cycle">—</b></div>
+      <div><span data-i18n="design">设计容量</span><b id="design">—</b></div>
+      <div><span data-i18n="fullcap">满充容量</span><b id="fullcap">—</b></div>
+    </div>
+  </section>
+
+  <!-- 调度 -->
+  <section class="page" id="p-sched" hidden>
+    <div class="card hero">
+      <div class="row"><span class="label" data-i18n="sched">调度</span><span class="pill" id="sstate">关闭</span></div>
+      <div class="big small"><span id="caps">—</span><i>GHz</i></div>
+      <div class="hint" id="shint">未限制，完全交给官方调度</div>
+    </div>
+
+    <div class="card">
+      <div class="switchrow" data-k="SAVE_ENABLED">
+        <div><div class="t" data-i18n="save">官调限频</div><div class="s" data-i18n="save_s">官方调度不变，只封顶最高频率</div></div>
+        <i class="sw"></i>
+      </div>
+      <div class="hint indent" data-i18n="gamehint">游戏中会自动暂停限频，退出游戏后恢复；检测到 Scene 正在调度前台应用时也会自动让出。</div>
+      <div class="switchrow" data-k="GPU_BOOST">
+        <div><div class="t" data-i18n="gpu">GPU Boost</div><div class="s" data-i18n="gpu_s">关闭后 GPU 允许下探到最低频段省电</div></div>
+        <i class="sw" id="gpusw"></i>
+      </div>
+      <div class="hint indent" id="gpuHint"></div>
+    </div>
+
+    <div class="card">
+      <span class="label" data-i18n="apps">耗电统计</span>
+      <div class="soon">
+        <div class="soonmain">Coming Soon</div>
+        <div class="soonsub">On Astra App</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 设置 -->
+  <section class="page" id="p-settings" hidden>
+    <div class="card">
+      <div class="devhead">
+        <span class="devname" id="dModel">—</span>
+        <span class="devtag" id="dVer">Astra</span>
+      </div>
+      <div class="devrow"><span data-i18n="rom">系统</span><b id="dRom">—</b></div>
+      <div class="devrow"><span data-i18n="kernel">内核</span><b id="dKernel">—</b></div>
+      <div class="devrow"><span>Root</span><b id="dRoot">—</b></div>
+    </div>
+
+    <div class="card">
+      <span class="label" data-i18n="intro">功能介绍</span>
+      <p class="desc" data-i18n="intro_t">为 Realme GT7 Pro 定制的模块：温控 · 电池 · 调度。所有开关即时生效，卸载模块自动还原全部设置，不写系统分区。</p>
+      <span class="label mt" data-i18n="changelog">更新日志</span>
+      <pre class="log" id="changelog"></pre>
+    </div>
+
+    <div class="card">
+      <div class="switchrow" id="langRow">
+        <div><div class="t" data-i18n="langrow">语言 / Language</div><div class="s" id="langNow">中文</div></div>
+        <div class="mini"><button data-lang="zh" class="on">中</button><button data-lang="en">EN</button></div>
+      </div>
+      <button class="btn ghost" id="report" data-i18n="rep">生成 debug 报告</button>
+      <div class="hint" data-i18n="reph">保存到 /data/adb/Astra/logs/ 并复制到 /sdcard/Astra/</div>
+    </div>
+
+    <div class="card">
+      <span class="label" data-i18n="author">作者</span>
+      <div class="devrow"><span>Dasikee</span><b>dasikee@qq.com</b></div>
+      <div class="hint" data-i18n="note">GT去温控模式建议重启一次（让厂商温控服务重读策略表）；温度伪装无需重启。官调限频与 Scene 不冲突：检测到 Scene 正在给前台应用下发调度策略时，模块会自动暂停限频让出控制权。</div>
+    </div>
+  </section>
+</main>
+
+<nav class="dock">
+  <button data-p="thermal" class="on">
+    <svg viewBox="0 0 24 24"><path d="M12 3v9"/><circle cx="12" cy="16.5" r="4"/></svg><span data-i18n="n1">温控</span>
+  </button>
+  <button data-p="battery">
+    <svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="16" height="10" rx="3"/><path d="M21.5 10.5v3"/></svg><span data-i18n="n2">电池</span>
+  </button>
+  <button data-p="sched">
+    <svg viewBox="0 0 24 24"><path d="M4 18V9"/><path d="M9.3 18V5"/><path d="M14.7 18v-7"/><path d="M20 18V7"/></svg><span data-i18n="n3">调度</span>
+  </button>
+  <button data-p="settings">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9 2 2 0 1 1-2.8 2.8 1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6 2 2 0 1 1-4 0 1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3 2 2 0 1 1-2.8-2.8 1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9 2 2 0 1 1 2.8-2.8 1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3 2 2 0 1 1 2.8 2.8 1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-i18n="n4">设置</span>
+  </button>
+</nav>
+
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
