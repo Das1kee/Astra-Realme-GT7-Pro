@@ -1,8 +1,9 @@
-id=astra
+﻿id=astra
 name=Astra
-version=Beta0.1.12
-versionCode=112
+version=Beta0.2.0
+versionCode=200
 author=Dasikee
 description=为Realme GT7 Pro定制的模块，功能为温控·电池·调度相关。私人定制切勿分享。
 webuiIcon=webroot/icon.png
 action=action.sh
+updateJson=https://github.com/Das1kee/Astra-Realme-GT7-Pro/releases/latest/download/update.json

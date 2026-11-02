@@ -10,6 +10,13 @@
 </head>
 <body>
 <div class="bg"></div>
+<canvas id="stars" aria-hidden="true"></canvas>
+<div class="overlay" id="overlay" hidden>
+  <div class="ovbox">
+    <div class="spinner"></div>
+    <div class="ovtext" id="ovtext">正在应用…</div>
+  </div>
+</div>
 
 <main id="stage">
   <header class="top">
@@ -95,16 +102,17 @@
       <div class="notice" id="cnotice" hidden data-i18n="notice">当前充电已开启满血充电</div>
       <div class="row between mt"><span class="sub" data-i18n="cut">温度保护线</span><b id="cutVal">45°</b></div>
       <input class="range" id="cut" type="range" min="43" max="48" step="1" value="45">
-      <div class="hint" data-i18n="cuth">旁路充电或到达保护线时自动切回官方策略。</div>
+      <div class="hint" data-i18n="cuth">到达保护线或电量 90% 自动交还官方充电策略。</div>
+      <div class="devrow"><span data-i18n="admax">本次接口上限</span><b id="admax">—</b></div>
+      <div class="devrow"><span data-i18n="simax">系统智能极速充电</span><b id="simax">—</b></div>
     </div>
 
     <div class="card grid">
-      <div><span data-i18n="remain">剩余电量</span><b id="remain">—</b></div>
-      <div><span data-i18n="percent">电量百分比</span><b id="percent">—</b></div>
-      <div><span data-i18n="health">电池健康</span><b id="health">—</b></div>
-      <div><span data-i18n="cycle">循环次数</span><b id="cycle">—</b></div>
-      <div><span data-i18n="design">设计容量</span><b id="design">—</b></div>
-      <div><span data-i18n="fullcap">满充容量</span><b id="fullcap">—</b></div>
+      <div class="soon">
+        <div class="soonmain">Coming Soon</div>
+        <div class="soonsub">ON ASTRA APP</div>
+      </div>
+      <div class="hint" style="text-align:center" data-i18n="bit_hint">电池详情（剩余电量 / 健康度 / 循环 / 容量曲线）将在 Astra App 提供。</div>
     </div>
   </section>
 
@@ -122,11 +130,16 @@
         <i class="sw"></i>
       </div>
       <div class="hint indent" data-i18n="gamehint">游戏中会自动暂停限频，退出游戏后恢复；检测到 Scene 正在调度前台应用时也会自动让出。</div>
-      <div class="switchrow" data-k="GPU_BOOST">
-        <div><div class="t" data-i18n="gpu">GPU Boost</div><div class="s" data-i18n="gpu_s">关闭后 GPU 允许下探到最低频段省电</div></div>
+      <div class="switchrow" data-k="DISABLE_GPU_BOOST">
+        <div><div class="t" data-i18n="gpu">禁用 GPU Boost</div><div class="s" data-i18n="gpu_s">开启则关闭 GPU 的 DCVS 提升；关闭为系统默认</div></div>
         <i class="sw" id="gpusw"></i>
       </div>
       <div class="hint indent" id="gpuHint"></div>
+      <div class="switchrow" data-k="DEEP_SLEEP">
+        <div><div class="t" data-i18n="deep">深度睡眠</div><div class="s" data-i18n="deep_s">熄屏 20 秒且未充电进入 doze；音乐/通话/亮屏/充电立即退出</div></div>
+        <i class="sw" id="deepsw"></i>
+      </div>
+      <div class="hint indent" id="deepHint"></div>
     </div>
 
     <div class="card">
@@ -169,6 +182,7 @@
     <div class="card">
       <span class="label" data-i18n="author">作者</span>
       <div class="devrow"><span>Dasikee</span><b>dasikee@qq.com</b></div>
+      <a class="link" href="https://github.com/Das1kee/Astra-Realme-GT7-Pro" target="_blank" rel="noopener">github.com/Das1kee/Astra-Realme-GT7-Pro</a>
       <div class="hint" data-i18n="note">GT去温控模式建议重启一次（让厂商温控服务重读策略表）；温度伪装无需重启。官调限频与 Scene 不冲突：检测到 Scene 正在给前台应用下发调度策略时，模块会自动暂停限频让出控制权。</div>
     </div>
   </section>

@@ -25,6 +25,7 @@ ui_print "- 版本：$A_ROM"
 ui_print " "
 
 ui_print "- 生成温控补丁…"
+ui_print "  （只替换降温策略表；ThermalService 全局配置与高温保护阈值一律不动，避免射频/温控服务异常）"
 PATCHDIR="$MODPATH/patch"
 mkdir -p "$PATCHDIR"
 
@@ -41,32 +42,6 @@ for src in /odm/etc/temperature_profile/sys_thermal_control_config.xml \
 		-e 's#maxCpuFreq="[^"]*"#maxCpuFreq="-1,-1"#g' \
 		-e 's#boostCeiling="[^"]*"#boostCeiling="-1,-1"#g' \
 		-e 's#boostCpuCoreCeiling="[^"]*"#boostCpuCoreCeiling="-1,-1"#g' \
-		"$src" >"$dst" 2>/dev/null && ui_print "  · $(basename "$src")"
-done
-
-for src in /odm/etc/ThermalServiceConfig/sys_thermal_config.xml; do
-	[ -f "$src" ] || continue
-	dst="$PATCHDIR$src"
-	mkdir -p "$(dirname "$dst")"
-	sed -e 's#<isOpen>1</isOpen>#<isOpen>0</isOpen>#' \
-		-e 's#<is_feature_on>1</is_feature_on>#<is_feature_on>0</is_feature_on>#' \
-		"$src" >"$dst" 2>/dev/null && ui_print "  · $(basename "$src")"
-done
-
-for src in /odm/etc/temperature_profile/sys_high_temp_protect_realme_*.xml; do
-	[ -f "$src" ] || continue
-	dst="$PATCHDIR$src"
-	mkdir -p "$(dirname "$dst")"
-	sed \
-		-e 's#<HighTemperatureProtectSwitch>true#<HighTemperatureProtectSwitch>false#' \
-		-e 's#<HighTemperatureFirstStepSwitch>true#<HighTemperatureFirstStepSwitch>false#' \
-		-e 's#<HighTemperatureDisableFlashSwitch>true#<HighTemperatureDisableFlashSwitch>false#' \
-		-e 's#<HighTemperatureDisableFlashChargeSwitch>true#<HighTemperatureDisableFlashChargeSwitch>false#' \
-		-e 's#<HighTemperatureControlVideoRecordSwitch>true#<HighTemperatureControlVideoRecordSwitch>false#' \
-		-e 's#<HighTemperatureProtectThresholdIn>[0-9]*#<HighTemperatureProtectThresholdIn>520#' \
-		-e 's#<HighTemperatureProtectThresholdOut>[0-9]*#<HighTemperatureProtectThresholdOut>500#' \
-		-e 's#<HighTemperatureProtectFirstStepIn>[0-9]*#<HighTemperatureProtectFirstStepIn>500#' \
-		-e 's#<HighTemperatureProtectFirstStepOut>[0-9]*#<HighTemperatureProtectFirstStepOut>480#' \
 		"$src" >"$dst" 2>/dev/null && ui_print "  · $(basename "$src")"
 done
 

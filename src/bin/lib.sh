@@ -33,7 +33,9 @@ CFG_CHARGE_AUTO=0
 CFG_CHARGE_NOW=0
 CFG_CHARGE_TEMP_CUT=45000
 CFG_SAVE_ENABLED=0
-CFG_GPU_BOOST=1
+CFG_DISABLE_GPU_BOOST=0
+CFG_DEEP_SLEEP=0
+CFG_DUAL_COMP=1
 CFG_LANG=zh
 
 cfg_load() {
@@ -56,7 +58,9 @@ cfg_load() {
 		CHARGE_NOW) CFG_CHARGE_NOW=${v:-0} ;;
 		CHARGE_TEMP_CUT) CFG_CHARGE_TEMP_CUT=${v:-45000} ;;
 		SAVE_ENABLED) CFG_SAVE_ENABLED=${v:-0} ;;
-		GPU_BOOST) CFG_GPU_BOOST=${v:-1} ;;
+		DISABLE_GPU_BOOST) CFG_DISABLE_GPU_BOOST=${v:-0} ;;
+		DEEP_SLEEP) CFG_DEEP_SLEEP=${v:-0} ;;
+		DUAL_COMP) CFG_DUAL_COMP=${v:-1} ;;
 		LANG) CFG_LANG=${v:-zh} ;;
 		esac
 	done <"$CONF"
@@ -81,6 +85,8 @@ ST_SAVE_APPLIED=0
 ST_GPU_STATE=
 ST_FG_GAME=0
 ST_FG_PKG=
+ST_SCENE_TAKEOVER=0
+ST_DS_ACTIVE=0
 ST_PROP_AT=0
 CAP_BASE=
 st_load() {
@@ -95,6 +101,9 @@ st_load() {
 		CHARGE_START) ST_CHARGE_START=${v:-0} ;;
 		SAVE_APPLIED) ST_SAVE_APPLIED=${v:-0} ;;
 		GPU_STATE) ST_GPU_STATE=${v:-} ;;
+		GPU_ORIG_MIN) GPU_ORIG_MIN=$v ;;
+		GPU_ORIG_MAX) GPU_ORIG_MAX=$v ;;
+		GPU_BOOST_ORIG) GPU_BOOST_ORIG=$v ;;
 		FG_GAME) ST_FG_GAME=${v:-0} ;;
 		FG_PKG) ST_FG_PKG=${v:-} ;;
 		PROP_AT) ST_PROP_AT=${v:-0} ;;
@@ -109,6 +118,8 @@ st_load() {
 		CURR_MA) CURR_MA=$v ;;
 		DIS_UAH) DIS_UAH=$v ;;
 		DIS_SEC) DIS_SEC=$v ;;
+		DS_ACTIVE) ST_DS_ACTIVE=$v ;;
+		MODEM_BAD) ST_MODEM_BAD=$v ;;
 		FG_AT) FG_AT=${v:-0} ;;
 		esac
 	done <"$STATE_FILE"
@@ -123,6 +134,9 @@ st_save() { # 一次写盘
 		echo "CHARGE_START=$ST_CHARGE_START"
 		echo "SAVE_APPLIED=$ST_SAVE_APPLIED"
 		echo "GPU_STATE=$ST_GPU_STATE"
+		echo "GPU_ORIG_MIN=$GPU_ORIG_MIN"
+		echo "GPU_ORIG_MAX=$GPU_ORIG_MAX"
+		echo "GPU_BOOST_ORIG=$GPU_BOOST_ORIG"
 		echo "FG_GAME=$ST_FG_GAME"
 		echo "FG_PKG=$ST_FG_PKG"
 		echo "PROP_AT=$ST_PROP_AT"
@@ -137,6 +151,8 @@ st_save() { # 一次写盘
 		echo "CURR_MA=$CURR_MA"
 		echo "DIS_UAH=$DIS_UAH"
 		echo "DIS_SEC=$DIS_SEC"
+		echo "DS_ACTIVE=${ST_DS_ACTIVE:-0}"
+		echo "MODEM_BAD=${ST_MODEM_BAD:-0}"
 		echo "FG_AT=${FG_AT:-0}"
 	} >"$STATE_FILE.tmp" 2>/dev/null && mv -f "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null
 }
@@ -201,8 +217,15 @@ ztmp() { # ztmp INDEX -> ZT
 	case "$ZT" in ''|*[!0-9-]*) ZT=0 ;; esac
 }
 emu_set() {
-	[ -e "$THERMAL/thermal_zone$1/emul_temp" ] || return 1
-	echo "$2" >"$THERMAL/thermal_zone$1/emul_temp" 2>/dev/null
+	z="$THERMAL/thermal_zone$1"
+	[ -e "$z/emul_temp" ] || return 1
+	t=""
+	IFS= read -r t <"$z/type" 2>/dev/null
+	# 安全线：射频/PA/mmWave/ddr/camera 热区一律不碰，否则可能掉信号
+	case "$t" in
+	*sdr*|*mmw*|*modem*|*_pa|*pa_*|ddr*|camera*) return 1 ;;
+	esac
+	echo "$2" >"$z/emul_temp" 2>/dev/null
 }
 real_batt_md() {
 	RB=0
@@ -311,6 +334,9 @@ thermal_off_on() {
 	[ -d "$MODDIR/patch" ] || return 0
 	: >"$MNT.new"
 	while IFS= read -r src; do
+		case "$src" in
+		*ThermalServiceConfig*|*high_temp_protect*) continue ;;
+		esac
 		dst=${src#"$MODDIR/patch"}
 		[ -f "$dst" ] || continue
 		if is_mounted "$dst" || mount --bind "$src" "$dst" 2>/dev/null; then
@@ -342,25 +368,28 @@ thermal_all_clear() { # 官方模式：确保没有任何伪装/挂载残留
 }
 
 # ---------------------------------------------------------------- 充电
+OPLUS=/sys/class/oplus_chg/battery
 charge_snapshot() {
 	: >"$STATE/charge.orig"
 	chmod 0600 "$STATE/charge.orig" 2>/dev/null
-	for f in "$BATT/constant_charge_current_max" "$BATT/input_current_limit" "$USB/input_current_limit" "$USB/current_max"; do
+	for f in "$BATT/constant_charge_current_max" "$BATT/input_current_limit" \
+		"$USB/input_current_limit" "$USB/current_max" "$OPLUS/fast_charge"; do
 		[ -r "$f" ] || continue
 		IFS= read -r v <"$f" 2>/dev/null
 		[ -n "$v" ] && echo "$f=$v" >>"$STATE/charge.orig"
 	done
 }
+# 满血：输入电流拉到适配器能给的最高值 + 打开快充开关（不改 vendor 的恒流/阶梯算法）
 charge_on() {
 	[ -s "$STATE/charge.orig" ] || charge_snapshot
-	while IFS='=' read -r f old; do
-		[ -w "$f" ] || continue
-		mx="${f}_max"
-		if [ -r "$mx" ]; then
-			IFS= read -r m <"$mx" 2>/dev/null
-			case "$m" in ''|*[!0-9]*|0) ;; *) echo "$m" >"$f" 2>/dev/null ;; esac
-		fi
-	done <"$STATE/charge.orig"
+	mx=0
+	IFS= read -r mx <"$USB/current_max" 2>/dev/null
+	case "$mx" in ''|*[!0-9]*) mx=0 ;; esac
+	[ -w "$OPLUS/fast_charge" ] && echo 1 >"$OPLUS/fast_charge" 2>/dev/null
+	if [ "$mx" -gt 0 ]; then
+		[ -w "$USB/input_current_limit" ] && echo "$mx" >"$USB/input_current_limit" 2>/dev/null
+		[ -w "$BATT/input_current_limit" ] && echo "$mx" >"$BATT/input_current_limit" 2>/dev/null
+	fi
 	ST_CHARGE_APPLIED=1
 }
 charge_off() {
@@ -374,6 +403,16 @@ charge_off() {
 charge_online() {
 	IFS= read -r s <"$BATT/status" 2>/dev/null
 	[ "$s" = "Charging" ] || [ "$s" = "Full" ]
+}
+# 系统「智能极速充电」是否开启（模块开启时模块优先）
+smart_charge_sys() {
+	for ns in global system secure; do
+		for k in smart_fast_charge smart_charge oplus_smart_charge smart_charging; do
+			v=$(settings get "$ns" "$k" 2>/dev/null)
+			[ "$v" = "1" ] && return 0
+		done
+	done
+	return 1
 }
 
 # ---- Scene 调度接管检测：Scene 在跑，且给当前前台应用下发了功耗模式 ----
@@ -413,6 +452,9 @@ cc_sample() {
 		dt=$((now - CC_AT))
 		dc=$((CC_LAST - cc))            # µAh，正=放电
 		CURR_MA=$(( dc * 3600 / dt / 1000 ))
+		# 电量计校准/满电修正会产生离谱差值，直接丢弃
+		[ "$CURR_MA" -gt 12000 ] && CURR_MA=0
+		[ "$CURR_MA" -lt -12000 ] && CURR_MA=0
 		CC_LAST=$cc
 		CC_AT=$now
 		if [ "$CURR_MA" -gt 0 ]; then
@@ -458,26 +500,32 @@ avg_from_bstats() {
 	ST_AVG_AT=$now
 }
 
-# 功率（毫瓦）：充电看 USB 输入；放电用库仑计电流 × 电池电压
+# 功率（毫瓦）：双电芯机型电池节点报单芯电压，整组 ×2（与若晴/Scene 同口径）
+pack_mv() {
+	batt_mv
+	PACK_MV=$VB_MV
+	[ "$CFG_DUAL_COMP" = "1" ] && PACK_MV=$(( VB_MV * 2 ))
+}
 power_mw() {
 	PMW=0
-	IFS= read -r iu <"$USB/current_now" 2>/dev/null
-	IFS= read -r vu <"$USB/voltage_now" 2>/dev/null
-	case "$iu" in ''|*[!0-9-]*) iu=0 ;; esac; iu=${iu#-}
-	case "$vu" in ''|*[!0-9-]*) vu=0 ;; esac
-	u=$(( (iu / 1000) * (vu / 1000) / 1000 ))
-	if [ "$u" -gt 0 ]; then
-		PMW=$u
-		return 0
-	fi
+	st=""
+	IFS= read -r st <"$BATT/status" 2>/dev/null
 	cm=${CURR_MA:-0}
 	case "$cm" in ''|*[!0-9-]*) cm=0 ;; esac
 	[ "$cm" -lt 0 ] && cm=$(( -cm ))
-	[ "$cm" -gt 0 ] && [ "${VB_MV:-0}" -gt 0 ] && PMW=$(( cm * VB_MV / 1000 ))
+	pack_mv
+	[ "$cm" -gt 0 ] && [ "$PACK_MV" -gt 0 ] && PMW=$(( cm * PACK_MV / 1000 ))
+	if [ "$PMW" -le 0 ] || [ "$st" = "Full" ]; then
+		IFS= read -r iu <"$USB/current_now" 2>/dev/null
+		IFS= read -r vu <"$USB/voltage_now" 2>/dev/null
+		case "$iu" in ''|*[!0-9-]*) iu=0 ;; esac; iu=${iu#-}
+		case "$vu" in ''|*[!0-9-]*) vu=0 ;; esac
+		PMW=$(( (iu / 1000) * (vu / 1000) / 1000 ))
+	fi
 }
-avg_power_tick() { # 仅在放电时累积平均功耗（毫瓦）
-	power_mw
+avg_power_tick() { # 放电平均功耗（毫瓦，含双电芯整组电压）
 	if charge_online; then return 0; fi
+	power_mw
 	[ "$PMW" -le 0 ] && return 0
 	case "${ST_AVG_MW:-}" in ''|*[!0-9]*) ST_AVG_MW=$PMW ;; *) ST_AVG_MW=$(( (ST_AVG_MW * 9 + PMW) / 10 )) ;; esac
 }
@@ -495,6 +543,7 @@ charge_tick() {
 		[ "$CFG_CHARGE_NOW" = "1" ] && { cfg_set CHARGE_NOW 0; CFG_CHARGE_NOW=0; }
 		[ "$ST_CHARGE_APPLIED" = "1" ] && charge_off
 		ST_CHARGE_START=0
+		ST_CHARGE_GUARD=0
 		return 0
 	fi
 	[ "$ST_CHARGE_START" = "0" ] && ST_CHARGE_START=$(date +%s)
@@ -511,6 +560,15 @@ charge_tick() {
 	if [ "$RB" -gt 0 ] && [ "$RB" -ge "$CFG_CHARGE_TEMP_CUT" ]; then
 		[ "$ST_CHARGE_APPLIED" = "1" ] && charge_off
 		ST_CHARGE_GUARD=1
+		return 0
+	fi
+	# 90% 之后交还官方阶梯充电（保护电池）
+	cap=0
+	IFS= read -r cap <"$BATT/capacity" 2>/dev/null
+	case "$cap" in ''|*[!0-9]*) cap=0 ;; esac
+	if [ "$cap" -ge 90 ]; then
+		[ "$ST_CHARGE_APPLIED" = "1" ] && charge_off
+		ST_CHARGE_GUARD=2
 		return 0
 	fi
 	ST_CHARGE_GUARD=0
@@ -542,13 +600,64 @@ caps_write() {
 	while [ "${w% }" != "$w" ]; do w=${w% }; done
 	[ -w "$CAP_NODE" ] && echo "$w" >"$CAP_NODE" 2>/dev/null
 }
+LITTLE_CAP=1785600
+PRIME_CAP=2246400
+clamp_freq() { # clamp_freq POLICY TARGET -> CLAMPED（贴到该 policy 可用频点）
+	CLAMPED=$2
+	av=""
+	IFS= read -r av <"$1/scaling_available_frequencies" 2>/dev/null
+	[ -z "$av" ] && return 0
+	best=""
+	for f in $av; do
+		if [ "$f" -le "$2" ]; then
+			if [ -z "$best" ]; then best=$f; elif [ "$f" -gt "$best" ]; then best=$f; fi
+		fi
+	done
+	[ -n "$best" ] && CLAMPED=$best
+}
+cap_snapshot() {
+	: >"$STATE/caps.orig"
+	for p in /sys/devices/system/cpu/cpufreq/policy*; do
+		[ -d "$p" ] || continue
+		v=""
+		IFS= read -r v <"$p/scaling_max_freq" 2>/dev/null
+		[ -n "$v" ] && echo "$p/scaling_max_freq=$v" >>"$STATE/caps.orig"
+	done
+}
 save_on() {
+	[ -s "$STATE/caps.orig" ] || cap_snapshot
 	[ -n "$CAP_BASE" ] || { caps_read; CAP_BASE=$CAPS; }
 	caps_write "$SAVE_CAPS"
+	for p in /sys/devices/system/cpu/cpufreq/policy*; do
+		[ -d "$p" ] || continue
+		rc=""
+		IFS= read -r rc <"$p/related_cpus" 2>/dev/null
+		case " $rc " in
+		*" 6 "*|*" 7 "*) tgt=$PRIME_CAP ;;
+		*) tgt=$LITTLE_CAP ;;
+		esac
+		clamp_freq "$p" "$tgt"
+		echo "$CLAMPED" >"$p/scaling_max_freq" 2>/dev/null
+	done
 	ST_SAVE_APPLIED=1
 }
 save_off() {
 	[ -n "$CAP_BASE" ] && caps_write "$CAP_BASE"
+	if [ -s "$STATE/caps.orig" ]; then
+		while IFS='=' read -r f v; do
+			[ -w "$f" ] || continue
+			# 快照录到的如果是被压过的值，就用硬件上限兜底
+			p=${f%/scaling_max_freq}
+			hw=""
+			IFS= read -r hw <"$p/cpuinfo_max_freq" 2>/dev/null
+			case "$hw" in ''|*[!0-9]*) hw="" ;; esac
+			if [ -n "$hw" ] && [ -n "$v" ] && [ "$v" -lt "$hw" ]; then
+				echo "$hw" >"$f" 2>/dev/null
+			else
+				[ -n "$v" ] && echo "$v" >"$f" 2>/dev/null
+			fi
+		done <"$STATE/caps.orig"
+	fi
 	ST_SAVE_APPLIED=0
 }
 gpu_dir() {
@@ -557,18 +666,43 @@ gpu_dir() {
 	done
 	return 1
 }
-GPU_BOOST_MIN=525000000
+# 真正的 GPU Boost 开关：kgsl 的 dcvs_boost（1=系统默认提升，0=禁用）
+kgsl_boost_node() {
+	for d in /sys/class/kgsl/kgsl-3d0 /sys/class/kgsl/*; do
+		[ -e "$d/dcvs_boost" ] && { echo "$d/dcvs_boost"; return 0; }
+	done
+	return 1
+}
 GPU_IDLE_MIN=160000000
-gpu_tick() { # GPU Boost：开=抬高下限减少掉帧，关=允许下探省电
+GPU_DISABLED_MAX=832000000
+gpu_tick() {
+	dis=$CFG_DISABLE_GPU_BOOST
+	# 官调限频开启时强制禁用 GPU Boost
+	[ "$CFG_SAVE_ENABLED" = "1" ] && dis=1
+	bn=$(kgsl_boost_node)
+	if [ -n "$bn" ]; then
+		if [ "$dis" = "1" ] && [ "$ST_GPU_STATE" != disabled ]; then
+			[ -z "$GPU_BOOST_ORIG" ] && IFS= read -r GPU_BOOST_ORIG <"$bn" 2>/dev/null
+			echo 0 >"$bn" 2>/dev/null
+			ST_GPU_STATE=disabled
+		elif [ "$dis" != "1" ] && [ "$ST_GPU_STATE" != default ]; then
+			echo "${GPU_BOOST_ORIG:-1}" >"$bn" 2>/dev/null
+			ST_GPU_STATE=default
+		fi
+		return 0
+	fi
+	# 兜底（没有 dcvs_boost 的机器）：压上限
 	gd=$(gpu_dir) || { ST_GPU_STATE=none; return 0; }
-	boost=$CFG_GPU_BOOST
-	[ "$CFG_SAVE_ENABLED" = "1" ] && boost=1
-	if [ "$boost" = "1" ] && [ "$ST_GPU_STATE" != boost ]; then
-		echo "$GPU_BOOST_MIN" >"$gd/min_freq" 2>/dev/null
-		ST_GPU_STATE=boost
-	elif [ "$boost" != "1" ] && [ "$ST_GPU_STATE" != normal ]; then
+	if [ "$dis" = "1" ] && [ "$ST_GPU_STATE" != disabled ]; then
+		[ -z "$GPU_ORIG_MIN" ] && IFS= read -r GPU_ORIG_MIN <"$gd/min_freq" 2>/dev/null
+		[ -z "$GPU_ORIG_MAX" ] && IFS= read -r GPU_ORIG_MAX <"$gd/max_freq" 2>/dev/null
 		echo "$GPU_IDLE_MIN" >"$gd/min_freq" 2>/dev/null
-		ST_GPU_STATE=normal
+		echo "$GPU_DISABLED_MAX" >"$gd/max_freq" 2>/dev/null
+		ST_GPU_STATE=disabled
+	elif [ "$dis" != "1" ] && [ "$ST_GPU_STATE" = disabled ]; then
+		[ -n "$GPU_ORIG_MIN" ] && echo "$GPU_ORIG_MIN" >"$gd/min_freq" 2>/dev/null
+		[ -n "$GPU_ORIG_MAX" ] && echo "$GPU_ORIG_MAX" >"$gd/max_freq" 2>/dev/null
+		ST_GPU_STATE=default
 	fi
 }
 foreground_pkg() {
@@ -600,6 +734,10 @@ sched_tick() {
 			ST_FG_PKG=$p
 			if is_game "$p"; then ST_FG_GAME=1; else ST_FG_GAME=0; fi
 			if scene_takes_over "$p"; then ST_SCENE_TAKEOVER=1; else ST_SCENE_TAKEOVER=0; fi
+			# 横屏非视频应用（游戏/全屏应用）→ 交还官方调度
+			if [ "$ST_FG_GAME" = "0" ] && ! is_video_pkg "$p" && screen_landscape; then
+				ST_FG_GAME=1
+			fi
 		}
 		# 游戏 / Scene 调度接管 → 立即让出，不和官方/Scene 抢
 		if [ "$ST_FG_GAME" = "1" ] || [ "$ST_SCENE_TAKEOVER" = "1" ]; then
@@ -613,6 +751,63 @@ sched_tick() {
 		ST_SCENE_TAKEOVER=0
 	fi
 	gpu_tick
+}
+
+# ---------------------------------------------------------------- 掉信号保护
+ST_MODEM_BAD=0
+modem_guard_tick() {
+	[ "$CFG_THERMAL_MODE" = "official" ] && { ST_MODEM_BAD=0; return 0; }
+	air=$(settings get global airplane_mode_on 2>/dev/null)
+	[ "$air" = "1" ] && { ST_MODEM_BAD=0; return 0; }
+	s=$(getprop gsm.sim.state 2>/dev/null)
+	s=${s%%,*}   # 只看 SIM1，副卡槽 ABSENT 属正常
+	case "$s" in
+	*ABSENT*|"")
+		ST_MODEM_BAD=$(( ${ST_MODEM_BAD:-0} + 4 ))
+		if [ "$ST_MODEM_BAD" -ge 180 ]; then
+			log "modem guard: SIM ABSENT ${ST_MODEM_BAD}s -> revert thermal to official"
+			thermal_all_clear
+			cfg_set THERMAL_MODE official
+			CFG_THERMAL_MODE=official
+			ST_MODEM_BAD=0
+		fi
+		;;
+	*) ST_MODEM_BAD=0 ;;
+	esac
+}
+
+VIDEO_PKGS="com.bilibili.app.in tv.danmaku.bili com.google.android.youtube com.tencent.qqlive com.qiyi.video com.youku.phone com.netflix.mediaclient com.mxtech.videoplayer.ad org.videolan.vlc com.ss.android.ugc.aweme com.coloros.video"
+is_video_pkg() {
+	case " $VIDEO_PKGS " in *" $1 "*) return 0 ;; esac
+	return 1
+}
+screen_landscape() {
+	dumpsys window 2>/dev/null | grep -m1 -o "mRotation=[0-9]" | grep -q "mRotation=[13]"
+}
+music_playing() {
+	dumpsys media_session 2>/dev/null | grep -q "state=PlaybackState {state=3"
+}
+in_call() {
+	dumpsys telephony.registry 2>/dev/null | grep -q "mCallState=1"
+}
+DS_AT=0
+deep_sleep_tick() {
+	if [ "$CFG_DEEP_SLEEP" != "1" ]; then deep_sleep_off; return 0; fi
+	if screen_on; then deep_sleep_off; return 0; fi
+	if charge_online; then deep_sleep_off; return 0; fi
+	if music_playing || in_call; then deep_sleep_off; return 0; fi
+	now=$(date +%s)
+	[ "$DS_AT" = "0" ] && { DS_AT=$now; return 0; }
+	[ $((now - DS_AT)) -lt 20 ] && return 0
+	[ "$ST_DS_ACTIVE" = "1" ] && return 0
+	dumpsys deviceidle force-idle >/dev/null 2>&1
+	ST_DS_ACTIVE=1
+}
+deep_sleep_off() {
+	DS_AT=0
+	[ "$ST_DS_ACTIVE" = "1" ] || return 0
+	dumpsys deviceidle unforce >/dev/null 2>&1
+	ST_DS_ACTIVE=0
 }
 
 # ---------------------------------------------------------------- 使用统计（Scene 式自采样）
@@ -690,10 +885,12 @@ tick() {
 	esac
 	# 保底：清理旧版本可能残留的 Scene 假温度挂载
 	[ "$CFG_SCENE_SEES_FAKE" = "1" ] || scene_spoof_off
+	modem_guard_tick
 	batt_mv
 	cc_sample
 	charge_tick
 	sched_tick
+	deep_sleep_tick
 	# 电量计还没攒够样本时，用 batterystats 兜底
 	[ "$AVG_MA" -le 0 ] && avg_from_bstats
 	[ -f "$DEV_CACHE" ] || cache_device

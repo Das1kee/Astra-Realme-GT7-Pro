@@ -23,20 +23,50 @@ done
 	[ -w "$f" ] && [ -n "$old" ] && echo "$old" >"$f" 2>/dev/null
 done <"$STATE/charge.orig"
 
-# CPU 频率上限（走 perf HAL 也能识别的节点）
+# CPU 频率上限（msm_performance + 各 policy）
 if [ -s "$STATE/state.conf" ]; then
 	while IFS='=' read -r k v; do
 		[ "$k" = "CAP_BASE" ] && [ -n "$v" ] && echo "$v" >/sys/kernel/msm_performance/parameters/cpu_max_freq 2>/dev/null
 	done <"$STATE/state.conf"
 fi
-for p in /sys/devices/system/cpu/cpufreq/policy*; do
-	chmod 0644 "$p/scaling_max_freq" 2>/dev/null
+if [ -s "$STATE/caps.orig" ]; then
+	while IFS='=' read -r f v; do
+		[ -w "$f" ] && [ -n "$v" ] && echo "$v" >"$f" 2>/dev/null
+	done <"$STATE/caps.orig"
+fi
+
+# 深度睡眠退出
+dumpsys deviceidle unforce >/dev/null 2>&1
+
+# GPU Boost（dcvs_boost）还原
+ori=""
+if [ -s "$STATE/state.conf" ]; then
+	while IFS='=' read -r k v; do
+		case "$k" in
+		GPU_BOOST_ORIG) ori=$v ;;
+		esac
+	done <"$STATE/state.conf"
+fi
+for b in /sys/class/kgsl/kgsl-3d0/dcvs_boost /sys/class/kgsl/*/dcvs_boost; do
+	[ -e "$b" ] && echo "${ori:-1}" >"$b" 2>/dev/null
 done
 
-# GPU 最低频
+# GPU 上下限
+gmin=""; gmax=""
+if [ -s "$STATE/state.conf" ]; then
+	while IFS='=' read -r k v; do
+		case "$k" in
+		GPU_ORIG_MIN) gmin=$v ;;
+		GPU_ORIG_MAX) gmax=$v ;;
+		esac
+	done <"$STATE/state.conf"
+fi
 for d in /sys/class/devfreq/*; do
 	case "$d" in *kgsl*|*gpu*|*gpufreq*) ;; *) continue ;; esac
-	echo 160000000 >"$d/min_freq" 2>/dev/null
+	[ -n "$gmin" ] && echo "$gmin" >"$d/min_freq" 2>/dev/null
+	[ -n "$gmax" ] && echo "$gmax" >"$d/max_freq" 2>/dev/null
+	[ -z "$gmin" ] && echo 160000000 >"$d/min_freq" 2>/dev/null
+	[ -z "$gmax" ] && echo 1100000000 >"$d/max_freq" 2>/dev/null
 	break
 done
 

@@ -35,17 +35,23 @@
       patch: "补丁状态", unmounted: "未挂载",
       pw: "充电功率", charging: "充电中", notch: "未充电", fulled: "已充满",
       notplug: "未连接充电器", dur: "充电时长", btemp: "电池温度",
+      chg_full: "已接管：满血充电（90% 前最快）", chg_hot: "温度到线，已交还官方充电",
+      chg_90: "已到 90%，交还官方阶梯充电", chg_off: "未接管，官方策略",
+      admax: "本次接口上限", simax: "系统智能极速充电",
       autot: "每次充电自动满血", autos: "插电接管，拔线还原",
       nowbtn: "本次充电满血", notice: "当前充电已开启满血充电",
-      cut: "温度保护线", cuth: "旁路充电或到达保护线时自动切回官方策略。",
+      cut: "温度保护线", cuth: "到达保护线或电量 90% 自动交还官方充电策略。",
+      deep: "深度睡眠", deep_s: "熄屏 20 秒且未充电进入 doze；音乐/通话/亮屏/充电立即退出",
+      deep_on: "已进入深度睡眠", deep_off: "待机中，未进入深度睡眠",
+      bit_hint: "电池详情（剩余电量 / 健康度 / 循环 / 容量曲线）将在 Astra App 提供。",
       remain: "剩余电量", percent: "电量百分比", health: "电池健康", design: "设计容量",
       fullcap: "满充容量", cycle: "循环次数",
       sched: "调度", capped: "限频中", uncapped: "未限制", ingame: "游戏 · 已暂停限频",
       sceneon: "Scene 接管",
       save: "官调限频", save_s: "官方调度不变，只封顶最高频率",
       gamehint: "游戏中会自动暂停限频，退出游戏后恢复；检测到 Scene 正在调度前台应用时也会自动让出。",
-      gpu: "GPU Boost", gpu_s: "关闭后 GPU 允许下探到最低频段省电",
-      gpu_forced: "省电限频开启时强制启用", gpu_free: "可自由开关",
+      gpu: "禁用 GPU Boost", gpu_s: "开启则关闭 GPU 的 DCVS 提升；关闭为系统默认",
+      gpu_forced: "官调限频开启时强制禁用", gpu_free: "可自由开关",
       apps: "耗电统计", avgpow: "平均功耗", curw: "当前功耗", appavg: "平均",
       appsh: "按 Astra 自安装后的前台采样统计，mAh 由整机电流折算，仅供参考。",
       appsnone: "暂无记录",
@@ -78,17 +84,23 @@
       patch: "Patch state", unmounted: "Not mounted",
       pw: "Power", charging: "Charging", notch: "Not charging", fulled: "Full",
       notplug: "No charger", dur: "Duration", btemp: "Battery temp",
+      chg_full: "Active: full speed (until 90%)", chg_hot: "Temp guard — official charging",
+      chg_90: "90% reached — official step charging", chg_off: "Not active — official policy",
+      admax: "Port limit", simax: "System smart charge",
       autot: "Full speed every charge", autos: "Applies on plug-in, reverts on unplug",
       nowbtn: "Full speed this charge", notice: "Full-speed charging enabled for this session",
-      cut: "Temperature guard", cuth: "Reverts on bypass charging or at the guard temperature.",
+      cut: "Temperature guard", cuth: "Reverts at the guard temperature or 90% charge.",
+      deep: "Deep sleep", deep_s: "Doze 20s after screen off; music/calls/screen/charging exit it",
+      deep_on: "In deep sleep", deep_off: "Idle, not in deep sleep",
+      bit_hint: "Battery details (remaining / health / cycles / curve) arrive with the Astra App.",
       remain: "Remaining", percent: "Level", health: "Health", design: "Design",
       fullcap: "Full charge", cycle: "Cycles",
       sched: "Scheduling", capped: "Capped", uncapped: "Unrestricted", ingame: "Game · cap paused",
       sceneon: "Scene in control",
       save: "Official-clock cap", save_s: "Official governor unchanged, only the ceiling drops",
       gamehint: "The cap pauses in games, and yields when Scene is scheduling the foreground app.",
-      gpu: "GPU Boost", gpu_s: "Off: GPU may drop to its lowest step to save power",
-      gpu_forced: "Forced on while the cap is enabled", gpu_free: "Free to toggle",
+      gpu: "Disable GPU Boost", gpu_s: "Turns off the GPU DCVS boost; off = system default",
+      gpu_forced: "Forced while the clock cap is on", gpu_free: "Free to toggle",
       apps: "Battery usage", avgpow: "Avg power", curw: "Now", appavg: "avg",
       appsh: "Sampled by Astra since install; mAh is derived from device current.",
       appsnone: "No records",
@@ -105,8 +117,8 @@
     }
   };
   var CHANGELOG = {
-    zh: "Beta0.1.12\n· 耗电统计整块改为 Coming Soon（后续由 Astra App 提供）\n\nBeta0.1.11\n· 当前功耗带符号；平均功耗改为放电会话平均\n· 最近应用显示 mAh 与该应用平均功耗\n\nBeta0.1.10\n· 功耗计量改用库仑计\n\nBeta0.1.09\n· 剩余电量 = 百分比 × 满充容量\n· 删除 Scene 开关；伪装温度 ±0.4℃\n· 官调限频 + Scene 接管让出\n\nBeta0.1.08\n· 模式改名；修复充电功率；设置页重排\n\nBeta0.1.07\n· 修复 SukiSU 桥接\n\nBeta0.1.06\n· 修复 modules_update 路径\n\nBeta0.1.05\n· 首个版本",
-    en: "Beta0.1.12\n· The usage card is now a placeholder — coming with the Astra App\n\nBeta0.1.11\n· Signed current power; session-average power\n· Recent apps show mAh and their own average power\n\nBeta0.1.10\n· Coulomb-counter metering\n\nBeta0.1.09\n· Remaining = percent × full capacity\n· Removed the Scene switch; ±0.4°C masking\n· Official-clock cap with Scene yield\n\nBeta0.1.08\n· Renamed modes; fixed charge power; new settings layout\n\nBeta0.1.07\n· Fixed the SukiSU bridge\n\nBeta0.1.06\n· Fixed modules_update paths\n\nBeta0.1.05\n· First build"
+    zh: "Beta0.2.0\n· 温控：切换模式显示 5 秒“正在切换/已生效”，GT去温控明确提示需重启\n· 温控：只保留降温策略表补丁（不再动 ThermalService 全局配置与高温保护阈值），并新增掉信号保护（射频热区不碰、SIM 异常自动回官方、15 分钟 3 次重启强制安全模式）\n· 电池：修复功率显示需要手动刷新；满血充电改为拉满输入电流+快充开关，90% 交还官方阶梯充电，保留温度保护\n· 电池：电池信息栏改为 Coming Soon\n· 调度：官调限频强化（同时写 msm_performance 与各 policy），内置双电芯补偿，游戏/横屏非视频自动交还，新增深度睡眠\n· 界面：星空效果、GitHub 入口、排版微调\n\nBeta0.1.13\n· 禁用 GPU Boost 语义纠正\n\nBeta0.1.12\n· 耗电统计 Coming Soon\n\nBeta0.1.11\n· 当前功耗带符号；平均功耗改为放电会话平均",
+    en: "Beta0.2.0\n· Thermal: 5s switching overlay; GT mode shows a reboot note\n· Thermal: only strategy tables are patched (ThermalService and high-temp thresholds untouched); new signal guard (RF zones skipped, SIM-absent auto revert, safe mode after 3 fast boots)\n· Battery: power refreshes on its own; full-speed charging raises input current + fast-charge flag, hands back at 90%, keeps the temperature guard\n· Battery: info grid is Coming Soon\n· Sched: stronger official-clock cap, built-in dual-cell compensation, landscape non-video hands back, new deep sleep\n· UI: starfield, GitHub link, layout polish\n\nBeta0.1.13\n· GPU Boost switch semantics fixed\n\nBeta0.1.12\n· Usage card is a placeholder\n\nBeta0.1.11\n· Signed current power; session-average power"
   };
 
   function $(s, r) { return (r || document).querySelector(s); }
@@ -260,21 +272,22 @@
     $("#cstate").textContent = online ? (ch.status === "Full" ? t("fulled") : t("charging")) : t("notch");
     $("#cstate").className = "pill" + (online ? " on" : "");
     $("#cw").textContent = (Number(ch.watts) / 1000).toFixed(1);
+    var guard = Number(ch.guard);
     $("#chint").textContent = online
-      ? (applied ? (lang === "zh" ? "已接管：满血充电" : "Active: full speed") : (lang === "zh" ? "已接管：官方策略" : "Active: official"))
+      ? (applied ? t("chg_full")
+        : guard === 1 ? t("chg_hot")
+          : guard === 2 ? t("chg_90")
+            : t("chg_off"))
       : t("notplug");
     $("#ctime").textContent = fmt(ch.elapsed);
     $("#ctemp").textContent = c(ch.temp) + "°";
-    $("#remain").textContent = (Number(ch.remain) || 0) + " mAh";
-    $("#percent").textContent = (Number(ch.capacity) || 0) + "%";
-    $("#health").textContent = ch.health || "—";
-    $("#cycle").textContent = ch.cycle ? ch.cycle : "—";
-    $("#design").textContent = Number(ch.design) > 0 ? ch.design + " mAh" : "—";
-    $("#fullcap").textContent = Number(ch.full) > 0 ? ch.full + " mAh" : "—";
     $("#cutVal").textContent = Math.round(Number(ch.cut) / 1000) + "°";
     $("#cut").value = Math.round(Number(ch.cut) / 1000);
     $("#cnotice").hidden = Number(ch.now) !== 1;
     $("#chargeNow").classList.toggle("on", Number(ch.now) === 1);
+    var am = Number(ch.admax || 0);
+    $("#admax").textContent = am > 0 ? (am / 1000).toFixed(1) + " W" : "—";
+    $("#simax").textContent = Number(ch.smart) ? t("on") : t("offs");
 
     $("#sstate").textContent = Number(sc.scene) ? t("sceneon")
       : Number(sc.game) ? t("ingame")
@@ -291,14 +304,17 @@
     $("#dRoot").textContent = s.device.root;
     $("#dVer").textContent = "Astra " + s.version;
 
-    var vals = { RAISE_WALL: mk.wall, CHARGE_AUTO: ch.auto, SAVE_ENABLED: sc.save, GPU_BOOST: (Number(sc.save) ? 1 : sc.gpu) };
+    var vals = { RAISE_WALL: mk.wall, CHARGE_AUTO: ch.auto, SAVE_ENABLED: sc.save, DISABLE_GPU_BOOST: sc.gpu, DEEP_SLEEP: sc.deep };
     $$(".switchrow[data-k]").forEach(function (el) {
       var k = el.dataset.k, sw = $(".sw", el);
       sw.classList.toggle("on", Number(vals[k]) === 1);
-      if (k === "GPU_BOOST") {
+      if (k === "DISABLE_GPU_BOOST") {
         var forced = Number(sc.gpu_forced) === 1;
         sw.classList.toggle("dim", forced);
         $("#gpuHint").textContent = forced ? t("gpu_forced") : t("gpu_free");
+      }
+      if (k === "DEEP_SLEEP") {
+        $("#deepHint").textContent = Number(sc.dsactive) ? t("deep_on") : t("deep_off");
       }
     });
   }
@@ -347,6 +363,34 @@
     }).then(function () { busy = false; });
   }
 
+  /* 切换类操作：盖一层 5 秒遮罩，确认命令确实生效后再放开，避免"看起来没反应" */
+  function applyOverlay(cmd, label) {
+    if (busy || !MOD) return;
+    busy = true;
+    var ov = $("#overlay"), txt = $("#ovtext");
+    txt.textContent = (lang === "zh" ? "正在切换到 " + label + "…" : "Switching to " + label + "…");
+    ov.hidden = false;
+    ov.classList.remove("ok");
+    var t0 = Date.now();
+    astra(cmd).then(function (out) {
+      var j = JSON.parse(out);
+      render(j);
+      var wait = Math.max(0, 3200 - (Date.now() - t0));
+      return new Promise(function (res) { setTimeout(res, wait); }).then(function () {
+        return astra("status");
+      }).then(function (out2) {
+        render(JSON.parse(out2));
+        txt.textContent = (lang === "zh" ? "已生效 ✓ " : "Applied ✓ ") + label;
+        ov.classList.add("ok");
+        return new Promise(function (res) { setTimeout(res, 1000); });
+      });
+    }).catch(function (e) {
+      txt.textContent = t("failed") + ": " + e.message;
+    }).then(function () {
+      setTimeout(function () { ov.hidden = true; busy = false; }, 300);
+    });
+  }
+
   /* ---------------- 绑定 ---------------- */
   function bind() {
     $$(".dock button").forEach(function (b) {
@@ -365,7 +409,11 @@
     });
 
     $$("#mode button").forEach(function (b) {
-      b.addEventListener("click", function () { act("thermal " + b.dataset.m); });
+      b.addEventListener("click", function () {
+        var m = b.dataset.m;
+        var label = m === "mask" ? t("mask") : m === "off" ? t("off") : t("official");
+        applyOverlay("thermal " + m, label);
+      });
     });
 
     $("#maskBase").addEventListener("change", function () { act("set MASK_BASE " + (this.value * 100)); });
@@ -377,11 +425,14 @@
     $$(".switchrow[data-k]").forEach(function (el) {
       el.addEventListener("click", function () {
         var k = el.dataset.k, sw = $(".sw", el);
-        if (k === "GPU_BOOST" && sw.classList.contains("dim")) { toast(t("gpu_forced")); return; }
+        if (k === "GPU_BOOST" || k === "DISABLE_GPU_BOOST") {
+          if (sw.classList.contains("dim")) { toast(t("gpu_forced")); return; }
+        }
         var next = sw.classList.contains("on") ? 0 : 1;
         sw.classList.toggle("on", next === 1);
         if (k === "SAVE_ENABLED") act("sched save " + (next ? "on" : "off"));
-        else if (k === "GPU_BOOST") act("sched gpu " + (next ? "on" : "off"));
+        else if (k === "DISABLE_GPU_BOOST") act("sched gpu " + (next ? "on" : "off"));
+        else if (k === "DEEP_SLEEP") act("sched deep " + (next ? "on" : "off"));
         else act("set " + k + " " + next);
       });
     });
@@ -453,8 +504,51 @@
       });
   }
 
+  /* ---------------- 星空（Astra） ---------------- */
+  function stars() {
+    var cv = document.getElementById("stars");
+    if (!cv || !cv.getContext) return;
+    var ctx = cv.getContext("2d"), w, h, list = [];
+    function resize() {
+      w = cv.width = window.innerWidth;
+      h = cv.height = window.innerHeight;
+      list = [];
+      var n = Math.round(w * h / 14000);
+      if (n > 130) n = 130;
+      for (var i = 0; i < n; i++) {
+        list.push({
+          x: Math.random() * w, y: Math.random() * h,
+          r: Math.random() * 1.25 + 0.35,
+          p: Math.random() * Math.PI * 2,
+          s: 0.35 + Math.random() * 0.9,
+          v: 0.02 + Math.random() * 0.05
+        });
+      }
+    }
+    resize();
+    window.addEventListener("resize", resize);
+    var t = 0;
+    function frame() {
+      t += 0.016;
+      ctx.clearRect(0, 0, w, h);
+      for (var i = 0; i < list.length; i++) {
+        var st = list[i];
+        st.y -= st.v;
+        if (st.y < -2) { st.y = h + 2; st.x = Math.random() * w; }
+        var a = 0.28 + 0.62 * Math.abs(Math.sin(t * st.s + st.p));
+        ctx.beginPath();
+        ctx.fillStyle = i % 7 === 0 ? "rgba(169,240,230," + a * 0.9 + ")" : "rgba(255,255,255," + a + ")";
+        ctx.arc(st.x, st.y, st.r, 0, 6.2832);
+        ctx.fill();
+      }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  }
+
   function boot() {
     setLang("zh");
+    stars();
     bind();
     init();
   }

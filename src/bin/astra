@@ -72,19 +72,20 @@ do_status() {
 	[ "$cf" -gt 0 ] && [ "$remain" -gt "$cf" ] && remain=$cf
 
 	power_mw; wmw=$PMW
-	batt_mv
+	pack_mv
 	# 电流符号：充电 +，放电 -
 	avgw=0
 	if [ "${DIS_SEC:-0}" -gt 0 ] 2>/dev/null; then
 		avgma=$(( DIS_UAH * 3600 / DIS_SEC / 1000 ))
-		avgw=$(( avgma * VB_MV / 1000 ))
+		avgw=$(( avgma * PACK_MV / 1000 ))
 	fi
 	[ "$avgw" -le 0 ] && { case "${ST_AVG_MW:-}" in ''|*[!0-9]*) ;; *) avgw=$ST_AVG_MW ;; esac; }
 	case "$st" in
-	Charging|Full) curw=$wmw ;;
+	Charging) curw=$wmw ;;
+	Full) curw=0 ;;
 	*)
 		curw=0
-		[ "${CURR_MA:-0}" -gt 0 ] && curw=$(( 0 - CURR_MA * VB_MV / 1000 ))
+		[ "${CURR_MA:-0}" -gt 0 ] && curw=$(( 0 - CURR_MA * PACK_MV / 1000 ))
 		;;
 	esac
 
@@ -148,10 +149,26 @@ do_status() {
 	num "$ST_CHARGE_GUARD"; n_cg=$NB
 	num "$CFG_CHARGE_TEMP_CUT"; n_cut=$NB
 	num "$CFG_SAVE_ENABLED"; n_save=$NB
-	num "$CFG_GPU_BOOST"; n_gpu=$NB
+	num "$CFG_DISABLE_GPU_BOOST"; n_gpu=$NB
+	[ "$CFG_SAVE_ENABLED" = "1" ] && n_gpu=1
+	num "$CFG_DEEP_SLEEP"; n_deep=$NB
+	num "$CFG_DUAL_COMP"; n_dual=$NB
+	num "$ST_DS_ACTIVE"; n_dsa=$NB
 	num "$ST_FG_GAME"; n_game=$NB
 	num "$little"; n_l=$NB
 	num "$prime"; n_p=$NB
+	# 适配器上限（mW）
+	admax=0
+	IFS= read -r ac <"$USB/current_max" 2>/dev/null
+	IFS= read -r av <"$USB/voltage_max" 2>/dev/null
+	ac=${ac#-}; av=${av#-}
+	case "$ac" in ''|*[!0-9]*) ac=0 ;; esac
+	case "$av" in ''|*[!0-9]*) av=0 ;; esac
+	[ "$ac" -gt 20000000 ] && ac=20000000
+	[ "$av" -gt 30000000 ] && av=30000000
+	[ "$ac" -gt 0 ] && [ "$av" -gt 0 ] && admax=$(( (ac / 1000) * (av / 1000000) ))
+	smart=0
+	smart_charge_sys && smart=1
 
 	# 单行输出：某些 root 桥接（libsu fastCmd）只取第一行，必须压成一行
 	cat <<EOF | tr -d '\n'
@@ -162,9 +179,11 @@ do_status() {
   "latch":$n_latch,"scene_fake":$n_scene,"wall":$n_wall,"fuse_batt":$n_fb,"fuse_soc":$n_fs}},
 "charge":{"online":$online,"status":"$st","watts":$wmw,"avg":$avgw,"cur":$curw,"elapsed":$el,
  "temp":$n_rb,"capacity":$cap,"health":"$hl","cycle":$cy,"remain":$remain,
- "full":$cf,"design":$cd,"auto":$n_ca,"now":$n_cn,"applied":$n_capp,"guard":$n_cg,"cut":$n_cut},
+ "full":$cf,"design":$cd,"auto":$n_ca,"now":$n_cn,"applied":$n_capp,"guard":$n_cg,"cut":$n_cut,
+ "admax":$admax,"smart":$smart},
 "sched":{"save":$n_save,"gpu":$n_gpu,"gpu_forced":$gpu_forced,"game":$n_game,
- "scene":$(num "${ST_SCENE_TAKEOVER:-0}"; echo $NB),"little":$n_l,"prime":$n_p},
+ "scene":$(num "${ST_SCENE_TAKEOVER:-0}"; echo $NB),"deep":$n_deep,"dsactive":$n_dsa,"dual":$n_dual,
+ "little":$n_l,"prime":$n_p},
 "lang":"$CFG_LANG"}
 EOF
 	printf '\n'
@@ -350,7 +369,9 @@ set)
 	cfg_set "$k" "$v"; cfg_load; st_load
 	case "$k" in
 	CHARGE_AUTO|CHARGE_NOW|CHARGE_TEMP_CUT) charge_tick ;;
-	SAVE_ENABLED|GPU_BOOST) sched_tick ;;
+	SAVE_ENABLED|DISABLE_GPU_BOOST) sched_tick ;;
+	DEEP_SLEEP) deep_sleep_tick ;;
+	DUAL_COMP) : ;;
 	SCENE_SEES_FAKE|MASK_BASE|MASK_AMP) [ "$ST_MASK_ACTIVE" = "1" ] && mask_tick ;;
 	esac
 	st_save
@@ -379,11 +400,12 @@ sched)
 	cfg_load; st_load
 	case "$2" in
 	save) [ "${3:-on}" = "on" ] && cfg_set SAVE_ENABLED 1 || cfg_set SAVE_ENABLED 0 ;;
-	gpu) [ "${3:-on}" = "on" ] && cfg_set GPU_BOOST 1 || cfg_set GPU_BOOST 0 ;;
+	gpu) [ "${3:-on}" = "on" ] && cfg_set DISABLE_GPU_BOOST 1 || cfg_set DISABLE_GPU_BOOST 0 ;;
+	deep) [ "${3:-on}" = "on" ] && cfg_set DEEP_SLEEP 1 || cfg_set DEEP_SLEEP 0 ;;
 	esac
-	cfg_load; sched_tick; st_save; do_status
+	cfg_load; sched_tick; deep_sleep_tick; st_save; do_status
 	;;
 log) tail -n "${2:-150}" "$LOGS/astra.log" 2>/dev/null ;;
 zones) ensure_zone_cache; cat "$ZONE_SPOOF" "$ZONE_BATTERY" "$ZONE_WITNESS" ;;
-*) echo "astra status|apps|set <K> <V>|thermal <off|mask|official>|charge <now|auto> <on|off>|sched <save|gpu> <on|off>|report|selftest|log" ;;
+*) echo "astra status|apps|set <K> <V>|thermal <off|mask|official>|charge <now|auto> <on|off>|sched <save|gpu|deep> <on|off>|report|selftest|log" ;;
 esac
