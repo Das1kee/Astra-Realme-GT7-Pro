@@ -2,9 +2,17 @@
 # Astra uninstall.sh —— 还原一切
 MODDIR=${0%/*}
 . "$MODDIR/bin/lib.sh" 2>/dev/null
+cfg_load
+st_load
 
 p=$(cat "$STATE/daemon.pid" 2>/dev/null)
 [ -n "$p" ] && kill -9 "$p" 2>/dev/null
+
+# 还原 GT 模式的配置挂载、厂商属性、GPU 上限与 ORMS 服务状态。
+extreme_clear_mounts
+extreme_props_off
+gpu_restore
+orms_restore
 
 # 温控补丁挂载
 if [ -s "$STATE/mounts.list" ]; then
@@ -69,9 +77,5 @@ for d in /sys/class/devfreq/*; do
 	[ -z "$gmax" ] && echo 1100000000 >"$d/max_freq" 2>/dev/null
 	break
 done
-
-# 厂商属性
-setprop persist.sys.environment.temp 25 2>/dev/null
-setprop persist.sys.oplus.wifi.sla.game_high_temperature 43 2>/dev/null
 
 rm -rf /data/adb/Astra 2>/dev/null

@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Astra CLI / WebUI 后端  Beta0.1.06
+# Astra CLI / WebUI 后端  Beta0.2.8
 ASTRA_MODDIR=${ASTRA_MODDIR:-$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)}
 . "$ASTRA_MODDIR/bin/lib.sh"
 
@@ -72,14 +72,12 @@ do_status() {
 	[ "$cf" -gt 0 ] && [ "$remain" -gt "$cf" ] && remain=$cf
 
 	power_mw; wmw=$PMW
+	# 电池页的“充电功率”只统计真正在充电时的功率；未充电/已充满一律 0。
+	charge_power_mw; cpmw=$CPMW
 	pack_mv
-	# 电流符号：充电 +，放电 -
+	# Use the smoothed power sample for the average, never a short counter interval.
 	avgw=0
-	if [ "${DIS_SEC:-0}" -gt 0 ] 2>/dev/null; then
-		avgma=$(( DIS_UAH * 3600 / DIS_SEC / 1000 ))
-		avgw=$(( avgma * PACK_MV / 1000 ))
-	fi
-	[ "$avgw" -le 0 ] && { case "${ST_AVG_MW:-}" in ''|*[!0-9]*) ;; *) avgw=$ST_AVG_MW ;; esac; }
+	case "${ST_AVG_MW:-}" in ''|*[!0-9]*) ;; *) avgw=$ST_AVG_MW ;; esac
 	case "$st" in
 	Charging) curw=$wmw ;;
 	Full) curw=0 ;;
@@ -89,13 +87,14 @@ do_status() {
 		;;
 	esac
 
-	online=1; el=0
-	case "$st" in Charging|Full) online=1 ;;
-	*)
-		online=0
-		;;
-	esac
-	if [ "$online" = "1" ] && [ "${ST_CHARGE_START:-0}" -gt 0 ] 2>/dev/null; then
+	# 是否插着充电器（与“是否正在充电”分开：充满/暂停时仍算已连接）
+	online=0
+	uon=""
+	IFS= read -r uon <"$USB/online" 2>/dev/null
+	[ "$uon" = "1" ] && online=1
+	case "$st" in Charging|Full|"Not charging") online=1 ;; esac
+	el=0
+	if [ "$st" = "Charging" ] && [ "${ST_CHARGE_START:-0}" -gt 0 ] 2>/dev/null; then
 		el=$(( $(date +%s) - ST_CHARGE_START ))
 	fi
 
@@ -131,9 +130,12 @@ do_status() {
 		[ "$k" = "version" ] && { VER=$v; break; }
 	done <"$MODDIR/module.prop" 2>/dev/null
 
-	gpu_forced=0; [ "$CFG_SAVE_ENABLED" = "1" ] && gpu_forced=1
+	gpu_forced=0; [ "$ST_SAVE_APPLIED" = "1" ] && gpu_forced=1
 
-	num "$ST_THERMAL_OFF"; n_off=$NB
+	thermal_mount_count
+	n_off=0
+	[ "$mode" = "off" ] && [ "$MOUNT_COUNT" -gt 0 ] && n_off=1
+	num "$MOUNT_COUNT"; n_mounts=$NB
 	num "$CFG_MASK_BASE"; n_base=$NB
 	num "$applied"; n_app=$NB
 	num "$rb"; n_rb=$NB
@@ -149,39 +151,29 @@ do_status() {
 	num "$ST_CHARGE_GUARD"; n_cg=$NB
 	num "$CFG_CHARGE_TEMP_CUT"; n_cut=$NB
 	num "$CFG_SAVE_ENABLED"; n_save=$NB
+	num "$ST_SAVE_APPLIED"; n_save_applied=$NB
 	num "$CFG_DISABLE_GPU_BOOST"; n_gpu=$NB
-	[ "$CFG_SAVE_ENABLED" = "1" ] && n_gpu=1
+	[ "$ST_SAVE_APPLIED" = "1" ] && n_gpu=1
 	num "$CFG_DEEP_SLEEP"; n_deep=$NB
 	num "$CFG_DUAL_COMP"; n_dual=$NB
 	num "$ST_DS_ACTIVE"; n_dsa=$NB
 	num "$ST_FG_GAME"; n_game=$NB
 	num "$little"; n_l=$NB
 	num "$prime"; n_p=$NB
-	# 适配器上限（mW）
-	admax=0
-	IFS= read -r ac <"$USB/current_max" 2>/dev/null
-	IFS= read -r av <"$USB/voltage_max" 2>/dev/null
-	ac=${ac#-}; av=${av#-}
-	case "$ac" in ''|*[!0-9]*) ac=0 ;; esac
-	case "$av" in ''|*[!0-9]*) av=0 ;; esac
-	[ "$ac" -gt 20000000 ] && ac=20000000
-	[ "$av" -gt 30000000 ] && av=30000000
-	[ "$ac" -gt 0 ] && [ "$av" -gt 0 ] && admax=$(( (ac / 1000) * (av / 1000000) ))
-	smart=0
-	smart_charge_sys && smart=1
+	num "$ST_RADIO_LATCH"; n_radio=$NB
+	num "$cpmw"; n_cpmw=$NB
 
 	# 单行输出：某些 root 桥接（libsu fastCmd）只取第一行，必须压成一行
 	cat <<EOF | tr -d '\n'
 {"version":"$VER",
 "device":{"model":"$DM","rom":"$DRR","kernel":"$DK","root":"$RR"},
-"thermal":{"mode":"$mode","off":$n_off,
+"thermal":{"mode":"$mode","off":$n_off,"mounts":$n_mounts,
  "mask":{"base":$n_base,"applied":$n_app,"real_batt":$n_rb,"real_soc":$n_rs,
-  "latch":$n_latch,"scene_fake":$n_scene,"wall":$n_wall,"fuse_batt":$n_fb,"fuse_soc":$n_fs}},
-"charge":{"online":$online,"status":"$st","watts":$wmw,"avg":$avgw,"cur":$curw,"elapsed":$el,
+  "latch":$n_latch,"radio":$n_radio,"scene_fake":$n_scene,"wall":$n_wall,"fuse_batt":$n_fb,"fuse_soc":$n_fs}},
+"charge":{"online":$online,"status":"$st","watts":$n_cpmw,"avg":$avgw,"cur":$curw,"elapsed":$el,
  "temp":$n_rb,"capacity":$cap,"health":"$hl","cycle":$cy,"remain":$remain,
- "full":$cf,"design":$cd,"auto":$n_ca,"now":$n_cn,"applied":$n_capp,"guard":$n_cg,"cut":$n_cut,
- "admax":$admax,"smart":$smart},
-"sched":{"save":$n_save,"gpu":$n_gpu,"gpu_forced":$gpu_forced,"game":$n_game,
+ "full":$cf,"design":$cd,"auto":$n_ca,"now":$n_cn,"applied":$n_capp,"guard":$n_cg,"cut":$n_cut},
+"sched":{"save":$n_save,"save_applied":$n_save_applied,"gpu":$n_gpu,"gpu_forced":$gpu_forced,"gpu_state":"${ST_GPU_STATE:-unknown}","game":$n_game,
  "scene":$(num "${ST_SCENE_TAKEOVER:-0}"; echo $NB),"deep":$n_deep,"dsactive":$n_dsa,"dual":$n_dual,
  "little":$n_l,"prime":$n_p},
 "lang":"$CFG_LANG"}
@@ -194,9 +186,9 @@ do_apps() {
 	cfg_load
 	st_load
 	now=$(date +%s)
-	batt_mv
+	pack_mv
 	[ -s "$USAGE_DB" ] || { echo '[]'; return; }
-	sort -t'|' -k2 -nr "$USAGE_DB" 2>/dev/null | head -3 >"$STATE/tmp/apps"
+	sort -t'|' -k3,3nr "$USAGE_DB" 2>/dev/null | head -3 >"$STATE/tmp/apps"
 	# 没有库仑计样本时（刚播种/充电早期）用当前平均电流估算
 	eff=$(( ${AVG_MA:-0} ))
 	case "$eff" in ''|*[!0-9]*) eff=0 ;; esac
@@ -216,7 +208,7 @@ do_apps() {
 			mah10=$(( sec * eff * 10 / 3600 ))
 			ma=$eff
 		fi
-		mw=$(( ma * VB_MV / 1000 ))
+		mw=$(( ma * PACK_MV / 1000 ))
 		lbl=$(app_name "$pkg")
 		[ $first -eq 1 ] || printf ','
 		first=0
@@ -257,39 +249,11 @@ do_seed() {
 do_avg() {
 	cfg_load
 	st_load
-	now=$(date +%s)
-	at=${ST_AVG_AT:-0}
-	case "$at" in ''|*[!0-9]*) at=0 ;; esac
-	if [ $((now - at)) -lt 120 ] && [ "${ST_AVG_MW:-0}" -gt 0 ] 2>/dev/null; then
-		mw=$ST_AVG_MW
-	else
-		line=$(dumpsys batterystats --charged 2>/dev/null | grep -m1 "Time on battery:")
-		sec=$(printf '%s' "$line" | awk '{
-			s=0
-			for (i=1;i<=NF;i++) {
-				v=$i; n=v+0
-				if (v ~ /h$/) s+=n*3600
-				else if (v ~ /m$/) s+=n*60
-				else if (v ~ /s$/) s+=n
-			}
-			print s
-		}')
-		mah=$(dumpsys batterystats --charged 2>/dev/null | grep -m1 "actual drain:" | sed 's/.*actual drain: *\([0-9][0-9]*\).*/\1/')
-		case "$sec" in ''|*[!0-9]*|0) sec=0 ;; esac
-		case "$mah" in ''|*[!0-9]*) mah=0 ;; esac
-		mv=3850
-		IFS= read -r vnow <"$BATT/voltage_now" 2>/dev/null
-		case "$vnow" in ''|*[!0-9]*) ;; *) mv=$((vnow / 1000)) ;; esac
-		mw=0
-		if [ "$sec" -gt 0 ] && [ "$mah" -gt 0 ]; then
-			ma=$(( mah * 3600 / sec ))
-			mw=$(( ma * mv / 1000 ))
-		fi
-		ST_AVG_MW=$mw
-		ST_AVG_AT=$now
-		st_save
-	fi
-	ma=$(( ST_AVG_MW * 1000 / 3850 ))
+	mw=0
+	case "${ST_AVG_MW:-}" in ''|*[!0-9]*) ;; *) mw=$ST_AVG_MW ;; esac
+	pack_mv
+	ma=0
+	[ "$PACK_MV" -gt 0 ] && ma=$(( mw * 1000 / PACK_MV ))
 	printf '{"mw":%s,"w":%s.%s,"ma":%s}\n' "$mw" "$((mw / 1000))" "$((mw % 1000 / 10))" "$ma"
 }
 
@@ -316,6 +280,12 @@ do_detail() {
 	printf '{"drain":%s,"total":%s,"on":%s,"off":%s,"avg_ma":%s}\n' "$drain" "$tsec" "$ssec" "$osec" "$avgma"
 }
 
+read_debug_node() {
+	DEBUG_NODE_VALUE=unreadable
+	[ -r "$1" ] || return 0
+	IFS= read -r DEBUG_NODE_VALUE <"$1" 2>/dev/null || DEBUG_NODE_VALUE=unreadable
+}
+
 case "$1" in
 status) do_status ;;
 detail) do_detail ;;
@@ -327,19 +297,28 @@ report)
 	out="$LOGS/debug-$(date +%Y%m%d-%H%M%S).txt"
 	mkdir -p "$SDCARD/Astra" 2>/dev/null
 	{
-		echo "Astra debug"; date
+		echo "Astra debug report"; date
+		echo "module=$(grep '^version=' "$MODDIR/module.prop" 2>/dev/null | cut -d= -f2) model=$(getprop ro.product.model) soc=$(getprop ro.soc.model)"
 		echo "== config =="; cat "$CONF" 2>/dev/null
 		echo "== state =="; cat "$STATE_FILE" 2>/dev/null
-		echo "== battery =="; for f in temp status current_now voltage_now capacity health cycle_count charge_full charge_full_design; do
-			IFS= read -r v <"$BATT/$f" 2>/dev/null; echo "$f=$v"; done
+		echo "== battery =="; for f in temp status current_now voltage_now charge_counter capacity health cycle_count charge_full charge_full_design; do
+			read_debug_node "$BATT/$f"; echo "$f=$DEBUG_NODE_VALUE"; done
+		echo "== USB input =="; for f in "$USB/current_now" "$USB/voltage_now" "$USB/current_max" "$USB/voltage_max" "$USB/input_current_limit"; do
+			read_debug_node "$f"; echo "$f=$DEBUG_NODE_VALUE"; done
+		echo "== charging controls =="; for f in "$BATT/input_current_limit" "$OPLUS/fast_charge" "$OPLUS/cool_down" "$OPLUS/normal_cool_down"; do
+			read_debug_node "$f"; echo "$f=$DEBUG_NODE_VALUE"; done
 		echo "== zones =="; for d in "$THERMAL"/thermal_zone*; do
 			IFS= read -r t <"$d/type" 2>/dev/null; IFS= read -r v <"$d/temp" 2>/dev/null
 			echo "$(basename "$d") $t $v"; done
+		echo "== thermal mounts =="; cat "$MNT" 2>/dev/null; thermal_mount_count; echo "verified_mount_count=$MOUNT_COUNT"
+		echo "orms_service=$(getprop "init.svc.$ORMS_SVC" 2>/dev/null)"
 		echo "== caps =="; IFS= read -r c <"$CAP_NODE" 2>/dev/null; echo "$c"
 		echo "== cpufreq =="; for p in /sys/devices/system/cpu/cpufreq/policy*; do
 			IFS= read -r a <"$p/scaling_max_freq"; IFS= read -r b <"$p/cpuinfo_max_freq"; echo "$p $a/$b"; done
 		echo "== gpu =="; for d in /sys/class/devfreq/*; do echo "$d min=$(cat $d/min_freq 2>/dev/null) max=$(cat $d/max_freq 2>/dev/null)"; done
-		echo "== log =="; tail -n 150 "$LOGS/astra.log" 2>/dev/null
+		for d in /sys/class/kgsl/kgsl-3d0 /sys/class/kgsl/*; do [ -e "$d/dcvs_boost" ] && echo "dcvs_boost=$d/dcvs_boost:$(cat "$d/dcvs_boost" 2>/dev/null)"; done
+		echo "== recent log =="; tail -n 150 "$LOGS/astra.log" 2>/dev/null
+		[ -f "$LOGS/astra.log.1" ] && { echo "== previous log =="; tail -n 50 "$LOGS/astra.log.1"; }
 	} >"$out" 2>&1
 	cp -f "$out" "$SDCARD/Astra/$(basename "$out")" 2>/dev/null
 	echo "$out"
@@ -349,15 +328,21 @@ selftest)
 	mkdir -p "$SDCARD/Astra" 2>/dev/null
 	{
 		echo "Astra selftest"; date; id
-		for t in shell_front shell_back socd sys-therm-0 battery; do
+		for t in shell_front shell_back sys-therm-0 battery socd; do
 			i=$(zone_idx "$t")
 			if [ -z "$i" ]; then echo "$t: NOT FOUND"; continue; fi
+			if ! zone_spoof_ok "$i" "$t"; then
+				case "$t" in
+				battery) ;;   # 电池热区按需伪装，默认允许
+				*) echo "$t: SKIPPED (unsafe zone: type=$(cat "$THERMAL/thermal_zone$i/type" 2>/dev/null) trip0=$(cat "$THERMAL/thermal_zone$i/trip_point_0_temp" 2>/dev/null))"; continue ;;
+				esac
+			fi
 			IFS= read -r before <"$THERMAL/thermal_zone$i/temp"
-			emu_set "$i" 26600; sleep 1
+			emu_write "$i" 26600; sleep 1
 			IFS= read -r after <"$THERMAL/thermal_zone$i/temp"
-			emu_set "$i" 0; sleep 1
+			emu_write "$i" 0; sleep 1
 			IFS= read -r back <"$THERMAL/thermal_zone$i/temp"
-			echo "$t: before=$before fake=$after back=$back $( [ "$after" = "26600" ] && echo WRITE_OK || echo WRITE_FAIL )"
+			echo "$t: idx=$i before=$before fake=$after back=$back $( [ "$after" = "26600" ] && echo WRITE_OK || echo WRITE_FAIL )"
 		done
 		echo "caps: $(cat "$CAP_NODE" 2>/dev/null)"
 	} >"$out" 2>&1
@@ -378,14 +363,20 @@ set)
 	do_status
 	;;
 thermal)
-	st_load; cfg_load
-	case "$2" in
-	off) thermal_off_on; mask_off; ST_MASK_LATCH=0 ;;
-	mask) thermal_off_off; ST_MASK_LATCH=0; mask_tick ;;
-	*) thermal_all_clear ;;
+	mode=${2:-official}
+	case "$mode" in off|mask|official) ;; *) echo "invalid thermal mode: $mode" >&2; exit 2 ;; esac
+	if ! mode_lock_acquire; then echo "thermal mode is busy; try again" >&2; exit 1; fi
+	cfg_set THERMAL_MODE "$mode"
+	cfg_load; st_load
+	# 清理旧版本可能残留在别的热区上的仿真值（emul_temp 不能回读，只能全量写 0）
+	emu_clear_all
+	case "$mode" in
+	off) mask_off; ST_MASK_LATCH=0; ST_RADIO_LATCH=0; thermal_off_keep ;;
+	mask) thermal_off_off; ST_MASK_LATCH=0; ST_RADIO_LATCH=0; mask_tick ;;
+	official) thermal_all_clear ;;
 	esac
-	cfg_set THERMAL_MODE "${2:-official}"
 	st_save
+	mode_lock_release
 	do_status
 	;;
 charge)
@@ -399,7 +390,15 @@ charge)
 sched)
 	cfg_load; st_load
 	case "$2" in
-	save) [ "${3:-on}" = "on" ] && cfg_set SAVE_ENABLED 1 || cfg_set SAVE_ENABLED 0 ;;
+	save)
+		if [ "${3:-on}" = "on" ]; then
+			cfg_set SAVE_ENABLED 1
+			# Do not carry a stale foreground-game/Scene decision into an explicit enable.
+			FG_AT=0; ST_FG_GAME=0; ST_SCENE_TAKEOVER=0
+		else
+			cfg_set SAVE_ENABLED 0
+		fi
+		;;
 	gpu) [ "${3:-on}" = "on" ] && cfg_set DISABLE_GPU_BOOST 1 || cfg_set DISABLE_GPU_BOOST 0 ;;
 	deep) [ "${3:-on}" = "on" ] && cfg_set DEEP_SLEEP 1 || cfg_set DEEP_SLEEP 0 ;;
 	esac

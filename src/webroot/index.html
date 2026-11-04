@@ -95,16 +95,15 @@
 
     <div class="card">
       <div class="switchrow" data-k="CHARGE_AUTO">
-        <div><div class="t" data-i18n="autot">每次充电自动满血</div><div class="s" data-i18n="autos">插电接管，拔线还原</div></div>
+        <div><div class="t" data-i18n="autot">每次充电请求解除模块限流</div><div class="s" data-i18n="autos">仅释放模块可控的限流项；速度仍由原厂充电策略决定</div></div>
         <i class="sw"></i>
       </div>
-      <button class="btn" id="chargeNow" data-i18n="nowbtn">本次充电满血</button>
-      <div class="notice" id="cnotice" hidden data-i18n="notice">当前充电已开启满血充电</div>
+      <button class="btn" id="chargeNow" data-i18n="nowbtn">本次充电请求解除模块限流</button>
       <div class="row between mt"><span class="sub" data-i18n="cut">温度保护线</span><b id="cutVal">45°</b></div>
       <input class="range" id="cut" type="range" min="43" max="48" step="1" value="45">
       <div class="hint" data-i18n="cuth">到达保护线或电量 90% 自动交还官方充电策略。</div>
-      <div class="devrow"><span data-i18n="admax">本次接口上限</span><b id="admax">—</b></div>
-      <div class="devrow"><span data-i18n="simax">系统智能极速充电</span><b id="simax">—</b></div>
+      
+      
     </div>
 
     <div class="card grid">
@@ -136,7 +135,7 @@
       </div>
       <div class="hint indent" id="gpuHint"></div>
       <div class="switchrow" data-k="DEEP_SLEEP">
-        <div><div class="t" data-i18n="deep">深度睡眠</div><div class="s" data-i18n="deep_s">熄屏 20 秒且未充电进入 doze；音乐/通话/亮屏/充电立即退出</div></div>
+        <div><div class="t" data-i18n="deep">深度睡眠</div><div class="s" data-i18n="deep_s">锁屏后进入深度睡眠，降低待机耗电；音乐/通话/通知保持，亮屏或充电立即解除</div></div>
         <i class="sw" id="deepsw"></i>
       </div>
       <div class="hint indent" id="deepHint"></div>
@@ -144,10 +143,12 @@
 
     <div class="card">
       <span class="label" data-i18n="apps">耗电统计</span>
-      <div class="soon">
-        <div class="soonmain">Coming Soon</div>
-        <div class="soonsub">On Astra App</div>
+      <div class="statline">
+        <div><span data-i18n="curw">当前功耗</span><b id="curPower">0.00 W</b></div>
+        <div><span data-i18n="avgpow">平均功耗</span><b id="avgPower">0.00 W</b></div>
       </div>
+      <div id="appsList" aria-live="polite"></div>
+      <div class="hint" data-i18n="appsh">按 Astra 自安装后的前台采样统计，mAh 由整机电流折算，仅供参考。</div>
     </div>
   </section>
 
@@ -167,7 +168,7 @@
       <span class="label" data-i18n="intro">功能介绍</span>
       <p class="desc" data-i18n="intro_t">为 Realme GT7 Pro 定制的模块：温控 · 电池 · 调度。所有开关即时生效，卸载模块自动还原全部设置，不写系统分区。</p>
       <span class="label mt" data-i18n="changelog">更新日志</span>
-      <pre class="log" id="changelog"></pre>
+      <div class="changelog" id="changelog"></div>
     </div>
 
     <div class="card">

@@ -79,6 +79,8 @@ html,body{margin:0;padding:0;background:#05060a;color:var(--ink);
 .pill.warn{background:rgba(255,178,107,.16);border-color:rgba(255,178,107,.45);color:#ffd2a8}
 .tag{font-size:11px;color:var(--dim2)}
 .tag.on{color:var(--teal)}
+.state-ok{color:var(--teal)!important;font-weight:600!important;text-align:right}
+.state-warn{color:var(--amber)!important;font-weight:600!important;text-align:right}
 
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
 .pair>div{background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:14px;padding:10px 11px}
@@ -88,7 +90,7 @@ html,body{margin:0;padding:0;background:#05060a;color:var(--ink);
 .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:10px;padding:4px;
   border-radius:14px;background:rgba(0,0,0,.3);border:1px solid var(--line)}
 .seg button{appearance:none;border:0;background:transparent;color:var(--dim);
-  font-size:12px;font-family:inherit;padding:10px 4px;border-radius:11px;min-height:40px}
+  font-size:11.5px;font-family:inherit;padding:10px 4px;border-radius:11px;min-height:44px;line-height:1.3}
 .seg button.on{color:#0a0b12;font-weight:600;background:linear-gradient(120deg,#cfc9ff,#a9f0e6)}
 .seg button:active{opacity:.8}
 
@@ -119,6 +121,7 @@ html,body{margin:0;padding:0;background:#05060a;color:var(--ink);
 .btn{width:100%;height:46px;border-radius:14px;border:1px solid var(--line);
   background:rgba(255,255,255,.055);color:var(--ink);font-size:13px;font-family:inherit;margin-top:12px}
 .btn:active{transform:scale(.98)}
+.btn.on{border-color:rgba(63,227,208,.38);background:rgba(63,227,208,.12);color:#a8fff2}
 .btn.primary{border:0;color:#0a0b12;font-weight:600;background:linear-gradient(120deg,#cfc9ff,#a9f0e6)}
 .btn.done{background:linear-gradient(120deg,rgba(92,225,160,.92),rgba(63,227,208,.8));color:#08221b}
 #chargeNow{background:linear-gradient(120deg,#cfc9ff,#a9f0e6);color:#0a0b12;border:0;font-weight:600}
@@ -163,6 +166,7 @@ html,body{margin:0;padding:0;background:#05060a;color:var(--ink);
 .app .val{text-align:right;flex:0 0 auto}
 .app .val b{display:block;font-size:12.5px;font-weight:500;font-variant-numeric:tabular-nums}
 .app .val span{font-size:10px;color:var(--dim2)}
+.apps-empty{padding:16px 0 8px;text-align:center;font-size:12px;color:var(--dim2)}
 .skel{height:44px;border-radius:12px;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.09),rgba(255,255,255,.04));
   background-size:200% 100%;animation:sh 1.3s infinite}
 @keyframes sh{from{background-position:200% 0}to{background-position:-200% 0}}
@@ -173,8 +177,14 @@ html,body{margin:0;padding:0;background:#05060a;color:var(--ink);
   background:linear-gradient(110deg,#fff 10%,#cfc9ff 55%,#a9f0e6 95%);
   -webkit-background-clip:text;background-clip:text;color:transparent}
 .soonsub{margin-top:8px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim2)}
-.log{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;line-height:1.7;color:var(--dim);
-  white-space:pre-wrap;margin:6px 0 0;max-height:180px;overflow:auto}
+.changelog{margin-top:8px;max-height:390px;overflow:auto;overscroll-behavior:contain}
+.change-entry{padding:10px 0 12px;border-top:1px solid var(--line)}
+.change-entry:first-child{border-top:0;padding-top:2px}
+.change-entry h3{font-size:13px;letter-spacing:.04em;margin:0 0 9px;color:var(--ink)}
+.change-group{display:grid;grid-template-columns:48px 1fr;gap:8px;margin:8px 0}
+.change-group h4{font-size:10px;letter-spacing:.08em;color:var(--teal);margin:2px 0 0}
+.change-group ul{list-style:none;margin:0;padding:0}
+.change-group li{font-size:11px;line-height:1.55;color:var(--dim);padding:0 0 5px}
 
 .dock{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 14px);
   width:min(430px,calc(100vw - 30px));height:62px;display:flex;align-items:center;justify-content:space-around;

@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # Astra — Realme GT7 Pro (RMX5010) 温控 / 电池 / 调度  核心库
-# Beta0.1.06 · Dasikee
+# Beta0.2.8 · Dasikee
 # 性能约定：status 路径里不许出现 awk/sed/grep/dumpsys，全部用内建命令
 
 ASTRA_ID=astra
@@ -18,7 +18,42 @@ USB=/sys/class/power_supply/usb
 umask 022
 mkdir -p "$LOGS" "$STATE/tmp" 2>/dev/null
 
-log() { echo "[$(date '+%m-%d %H:%M:%S')] $*" >>"$LOGS/astra.log" 2>/dev/null; }
+log() {
+	_log_file=$LOGS/astra.log
+	_log_size=$(wc -c <"$_log_file" 2>/dev/null)
+	case "$_log_size" in ''|*[!0-9]*) _log_size=0 ;; esac
+	if [ "$_log_size" -ge 524288 ]; then
+		rm -f "$LOGS/astra.log.2" 2>/dev/null
+		[ -f "$LOGS/astra.log.1" ] && mv -f "$LOGS/astra.log.1" "$LOGS/astra.log.2" 2>/dev/null
+		mv -f "$_log_file" "$LOGS/astra.log.1" 2>/dev/null
+	fi
+	printf '[%s] %s\n' "$(date '+%m-%d %H:%M:%S')" "$*" >>"$_log_file" 2>/dev/null
+}
+
+MODE_LOCK=$STATE/.thermal-mode.lock
+mode_lock_acquire() {
+	_mode_wait=0
+	while ! mkdir "$MODE_LOCK" 2>/dev/null; do
+		_mode_owner=$(cat "$MODE_LOCK/owner" 2>/dev/null)
+		if [ -n "$_mode_owner" ] && [ ! -d "/proc/$_mode_owner" ]; then
+			rm -rf "$MODE_LOCK" 2>/dev/null
+		elif [ -z "$_mode_owner" ] && [ "$_mode_wait" -ge 3 ]; then
+			rmdir "$MODE_LOCK" 2>/dev/null
+		fi
+		_mode_wait=$((_mode_wait + 1))
+		[ "$_mode_wait" -ge 20 ] && return 1
+		sleep 1
+	done
+	echo $$ >"$MODE_LOCK/owner" 2>/dev/null
+	return 0
+}
+mode_lock_release() {
+	_mode_owner=$(cat "$MODE_LOCK/owner" 2>/dev/null)
+	if [ "$_mode_owner" = "$$" ]; then
+		rm -f "$MODE_LOCK/owner" 2>/dev/null
+		rmdir "$MODE_LOCK" 2>/dev/null
+	fi
+}
 
 # ---------------------------------------------------------------- 配置（一次性读入）
 CFG_THERMAL_MODE=official
@@ -87,6 +122,7 @@ ST_FG_GAME=0
 ST_FG_PKG=
 ST_SCENE_TAKEOVER=0
 ST_DS_ACTIVE=0
+ST_RADIO_LATCH=0
 ST_PROP_AT=0
 CAP_BASE=
 st_load() {
@@ -111,6 +147,7 @@ st_load() {
 		USAGE_AT) ST_USAGE_AT=$v ;;
 		AVG_MW) ST_AVG_MW=$v ;;
 		AVG_AT) ST_AVG_AT=$v ;;
+		AVG_MODE) ST_AVG_MODE=$v ;;
 		SCENE_TAKEOVER) ST_SCENE_TAKEOVER=$v ;;
 		CC_LAST) CC_LAST=$v ;;
 		CC_AT) CC_AT=$v ;;
@@ -120,6 +157,7 @@ st_load() {
 		DIS_SEC) DIS_SEC=$v ;;
 		DS_ACTIVE) ST_DS_ACTIVE=$v ;;
 		MODEM_BAD) ST_MODEM_BAD=$v ;;
+		RADIO_LATCH) ST_RADIO_LATCH=${v:-0} ;;
 		FG_AT) FG_AT=${v:-0} ;;
 		esac
 	done <"$STATE_FILE"
@@ -144,6 +182,7 @@ st_save() { # 一次写盘
 		echo "USAGE_AT=${ST_USAGE_AT:-0}"
 		echo "AVG_MW=${ST_AVG_MW:-0}"
 		echo "AVG_AT=${ST_AVG_AT:-0}"
+		echo "AVG_MODE=${ST_AVG_MODE:-}"
 		echo "SCENE_TAKEOVER=${ST_SCENE_TAKEOVER:-0}"
 		echo "CC_LAST=$CC_LAST"
 		echo "CC_AT=$CC_AT"
@@ -153,6 +192,7 @@ st_save() { # 一次写盘
 		echo "DIS_SEC=$DIS_SEC"
 		echo "DS_ACTIVE=${ST_DS_ACTIVE:-0}"
 		echo "MODEM_BAD=${ST_MODEM_BAD:-0}"
+		echo "RADIO_LATCH=${ST_RADIO_LATCH:-0}"
 		echo "FG_AT=${FG_AT:-0}"
 	} >"$STATE_FILE.tmp" 2>/dev/null && mv -f "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null
 }
@@ -188,6 +228,13 @@ fnum() { case "$1" in ''|*[!0-9-]*) echo 0 ;; *) echo "$1" ;; esac; }
 ZONE_SPOOF="$STATE/zones.spoof"
 ZONE_WITNESS="$STATE/zones.witness"
 ZONE_BATTERY="$STATE/zones.battery"
+ZONE_ACTIVE="$STATE/zones.active"
+# 伪装目标只保留皮肤/主板这类“供显示和温控策略使用”的传感器。
+# socd 绝对不能写：它是整摄氏度单位的 SoC 传感器，固件 trip 为 100℃；
+# 写入 30100（毫摄氏度）在固件眼里就是 30100℃，直接触发厂商紧急过温保护，
+# 实测会让手机掉信号（VOICE/DATA OUT_OF_SERVICE、运营商清空），因此从名单移除。
+ZONE_SPOOF_NAMES="shell_front shell_frame shell_back sys-therm-0 sys-therm-2 sys-therm-4 sys-therm-5 sys-therm-6"
+ZONE_WITNESS_NAMES="cpuss-0-0 cpuss-0-1 cpuss-1-0 cpuss-1-1 gpuss-0 gpuss-2 gpuss-4 gpuss-6 gpuss-7 cpu-0-2-0 cpu-1-1-1"
 zone_idx() {
 	for d in "$THERMAL"/thermal_zone*; do
 		R=
@@ -196,36 +243,97 @@ zone_idx() {
 	done
 	return 1
 }
+zone_get_type() { # zone_get_type INDEX -> ZT_TYPE（空 = 热区不存在）
+	ZT_TYPE=
+	[ -n "$1" ] && [ -d "$THERMAL/thermal_zone$1" ] || return 1
+	IFS= read -r ZT_TYPE <"$THERMAL/thermal_zone$1/type" 2>/dev/null
+	[ -n "$ZT_TYPE" ]
+}
+# 射频 / 调制解调器 / NSP / 电源管理 / 充电相关热区一律不碰
+zone_is_rf() {
+	case "$1" in
+	*sdr*|*mmw*|*modem*|*mdmss*|*nsp*|*_pa|*pa_*|ddr*|camera*|socd*|pm8*|pmih*|*_tz|usb*|svooc*|*mos*|vbat*|*ibat*|*bcl*) return 0 ;;
+	esac
+	return 1
+}
+# 热区温度单位校验：trip_point_0_temp 形如 100/90 说明该热区用“摄氏度”，
+# 写毫摄氏度会被固件当成极端过温；正常热区是 125000/135000（毫摄氏度）。
+zone_scale_ok() {
+	_zt=0
+	IFS= read -r _zt <"$THERMAL/thermal_zone$1/trip_point_0_temp" 2>/dev/null
+	case "$_zt" in ''|*[!0-9]*) return 0 ;; esac
+	[ "$_zt" -eq 0 ] && return 0
+	[ "$_zt" -gt 1000 ] && return 0
+	return 1
+}
+zone_spoof_ok() { # zone_spoof_ok INDEX NAME -> 0 = 序号仍指向该热区且可安全写入
+	zone_get_type "$1" || return 1
+	[ "$ZT_TYPE" = "$2" ] || return 1
+	zone_is_rf "$ZT_TYPE" && return 1
+	zone_scale_ok "$1" || return 1
+	[ -e "$THERMAL/thermal_zone$1/emul_temp" ] || return 1
+	return 0
+}
+emu_write() { # emu_write INDEX VALUE —— 0 表示关闭仿真，对任何热区都安全
+	[ -e "$THERMAL/thermal_zone$1/emul_temp" ] || return 1
+	echo "$2" >"$THERMAL/thermal_zone$1/emul_temp" 2>/dev/null
+}
+emu_clear_all() { # 清掉所有热区的仿真值（开机/切换模式时清理旧版残留）
+	for d in "$THERMAL"/thermal_zone*; do
+		[ -e "$d/emul_temp" ] && echo 0 >"$d/emul_temp" 2>/dev/null
+	done
+	: >"$ZONE_ACTIVE" 2>/dev/null
+}
 build_zone_cache() {
 	: >"$ZONE_SPOOF"
-	for t in shell_front shell_frame shell_back socd sys-therm-0 sys-therm-2 sys-therm-4 sys-therm-5 sys-therm-6; do
+	: >"$ZONE_WITNESS"
+	: >"$ZONE_BATTERY"
+	for t in $ZONE_SPOOF_NAMES; do
 		i=$(zone_idx "$t" 2>/dev/null)
 		[ -n "$i" ] && echo "$t $i" >>"$ZONE_SPOOF"
 	done
-	for t in cpuss-0-0 cpuss-0-1 cpuss-1-0 cpuss-1-1 gpuss-0 gpuss-2 gpuss-4 gpuss-6 gpuss-7 cpu-0-2-0 cpu-1-1-1; do
+	for t in $ZONE_WITNESS_NAMES; do
 		i=$(zone_idx "$t" 2>/dev/null)
 		[ -n "$i" ] && echo "$t $i" >>"$ZONE_WITNESS"
 	done
 	i=$(zone_idx battery 2>/dev/null)
-	[ -n "$i" ] && echo "battery $i" >"$ZONE_BATTERY" || : >"$ZONE_BATTERY"
+	[ -n "$i" ] && echo "battery $i" >>"$ZONE_BATTERY"
 	log "zones: spoof=$(wc -l <"$ZONE_SPOOF") witness=$(wc -l <"$ZONE_WITNESS")"
 }
-ensure_zone_cache() { [ -s "$ZONE_SPOOF" ] || build_zone_cache; }
+zone_cache_valid() { # 每个“名字↔序号”是否仍然对得上（热区序号会随开机变化）
+	while read -r _n _i; do
+		[ -n "$_i" ] || continue
+		zone_get_type "$_i" || return 1
+		[ "$ZT_TYPE" = "$_n" ] || return 1
+	done <"$ZONE_SPOOF"
+	while read -r _n _i; do
+		[ -n "$_i" ] || continue
+		zone_get_type "$_i" || return 1
+		[ "$ZT_TYPE" = "$_n" ] || return 1
+	done <"$ZONE_WITNESS"
+	while read -r _n _i; do
+		[ -n "$_i" ] || continue
+		zone_get_type "$_i" || return 1
+		[ "$ZT_TYPE" = "$_n" ] || return 1
+	done <"$ZONE_BATTERY"
+	return 0
+}
+ensure_zone_cache() {
+	[ -s "$ZONE_SPOOF" ] && zone_cache_valid && return 0
+	[ -s "$ZONE_SPOOF" ] && log "thermal zone index changed; rebuilding zone cache"
+	build_zone_cache
+}
 ztmp() { # ztmp INDEX -> ZT
 	ZT=0
 	IFS= read -r ZT <"$THERMAL/thermal_zone$1/temp" 2>/dev/null
 	case "$ZT" in ''|*[!0-9-]*) ZT=0 ;; esac
 }
-emu_set() {
-	z="$THERMAL/thermal_zone$1"
-	[ -e "$z/emul_temp" ] || return 1
-	t=""
-	IFS= read -r t <"$z/type" 2>/dev/null
-	# 安全线：射频/PA/mmWave/ddr/camera 热区一律不碰，否则可能掉信号
-	case "$t" in
-	*sdr*|*mmw*|*modem*|*_pa|*pa_*|ddr*|camera*) return 1 ;;
-	esac
-	echo "$2" >"$z/emul_temp" 2>/dev/null
+emu_set() { # 旧接口：只做安全过滤的底层写入（selftest 用）
+	[ -e "$THERMAL/thermal_zone$1/emul_temp" ] || return 1
+	zone_get_type "$1" || return 1
+	zone_is_rf "$ZT_TYPE" && return 1
+	zone_scale_ok "$1" || return 1
+	emu_write "$1" "$2"
 }
 real_batt_md() {
 	RB=0
@@ -238,8 +346,10 @@ real_batt_md() {
 		RB=0
 	fi
 	[ "$RB" -gt 1000 ] && return 0
-	# 退路：热区（注意电池热区可能正在被伪装，只在万不得已时用）
-	IFS= read -r RB <"$THERMAL/thermal_zone$(cat "$ZONE_BATTERY" 2>/dev/null | cut -d' ' -f2)/temp" 2>/dev/null
+	# 退路：热区（注意电池热区可能正在被伪装，只在万不得已时用；序号以名字校验）
+	_fb=0
+	while read -r _n _i; do [ "$_n" = "battery" ] && _fb=$_i; done <"$ZONE_BATTERY"
+	[ -n "$_fb" ] && IFS= read -r RB <"$THERMAL/thermal_zone$_fb/temp" 2>/dev/null
 	case "$RB" in ''|*[!0-9-]*) RB=0 ;; esac
 	[ "$RB" -gt 1000 ] || RB=0
 }
@@ -270,21 +380,48 @@ real_soc_md() {
 
 # ---------------------------------------------------------------- 伪装温度
 mask_off() {
-	while read -r _t i; do [ -n "$i" ] && emu_set "$i" 0; done <"$ZONE_SPOOF"
-	while read -r _t i; do [ -n "$i" ] && emu_set "$i" 0; done <"$ZONE_BATTERY"
+	# emul_temp 在本机不可回读，所以只能靠 zones.active 记账，精确清掉写过的地方
+	if [ -s "$ZONE_ACTIVE" ]; then
+		while read -r i _n; do
+			[ -n "$i" ] && emu_write "$i" 0
+		done <"$ZONE_ACTIVE"
+	fi
+	# 兜底：缓存指向的热区也写 0（0 = 关闭仿真，对任何热区都安全）
+	while read -r _n i; do [ -n "$i" ] && emu_write "$i" 0; done <"$ZONE_SPOOF"
+	while read -r _n i; do [ -n "$i" ] && emu_write "$i" 0; done <"$ZONE_BATTERY"
+	: >"$ZONE_ACTIVE" 2>/dev/null
+	rm -f "$ZONE_ACTIVE.tmp" 2>/dev/null
 	scene_spoof_off
 	ST_MASK_ACTIVE=0
 }
 mask_on() { # mask_on FAKE_MD
 	f="$1"
-	while read -r _t i; do [ -n "$i" ] && emu_set "$i" "$f"; done <"$ZONE_SPOOF"
-	# 默认：Scene 看到真实电池温度；打开 SCENE_SEES_FAKE 才伪装（热区 + power_supply 节点）
-	if [ "$CFG_SCENE_SEES_FAKE" = "1" ]; then
-		while read -r _t i; do [ -n "$i" ] && emu_set "$i" "$f"; done <"$ZONE_BATTERY"
-	else
-		while read -r _t i; do [ -n "$i" ] && emu_set "$i" 0; done <"$ZONE_BATTERY"
-	fi
+	ok=0
+	drift=0
+	: >"$ZONE_ACTIVE.tmp" 2>/dev/null
+	while read -r _n i; do
+		[ -n "$i" ] || continue
+		# 序号必须仍然指向缓存里的传感器名字，否则绝不写（防止热区重排后写错传感器）
+		if zone_spoof_ok "$i" "$_n"; then
+			emu_write "$i" "$f" && { echo "$i $_n" >>"$ZONE_ACTIVE.tmp"; ok=$((ok + 1)); }
+		else
+			drift=1
+		fi
+	done <"$ZONE_SPOOF"
+	# 默认：Scene 看到真实电池温度；打开 SCENE_SEES_FAKE 才伪装电池热区
+	scene_f="$f"
+	[ "$CFG_SCENE_SEES_FAKE" = "1" ] || scene_f=0
+	while read -r _n i; do
+		[ -n "$i" ] || continue
+		zone_get_type "$i" && [ "$ZT_TYPE" = "$_n" ] && emu_write "$i" "$scene_f"
+	done <"$ZONE_BATTERY"
+	mv -f "$ZONE_ACTIVE.tmp" "$ZONE_ACTIVE" 2>/dev/null
+	MASK_SPOOFED=$ok
 	ST_MASK_ACTIVE=1
+	if [ "$drift" = "1" ]; then
+		log "thermal zone cache drifted; rebuilt (spoofed=$ok)"
+		build_zone_cache
+	fi
 }
 mask_tick() {
 	ensure_zone_cache
@@ -330,67 +467,206 @@ is_mounted() { # 不用 mountpoint（部分机型 toybox 没编进去）；sysfs
 	[ -z "$p" ] && p="$1"
 	awk -v a="$1" -v b="$p" '$2==a || $2==b {f=1} END{exit !f}' /proc/mounts 2>/dev/null
 }
-thermal_off_on() {
-	[ -d "$MODDIR/patch" ] || return 0
-	: >"$MNT.new"
-	while IFS= read -r src; do
-		case "$src" in
-		*ThermalServiceConfig*|*high_temp_protect*) continue ;;
-		esac
-		dst=${src#"$MODDIR/patch"}
-		[ -f "$dst" ] || continue
-		if is_mounted "$dst" || mount --bind "$src" "$dst" 2>/dev/null; then
-			echo "$dst" >>"$MNT.new"
-		else
-			log "bind FAILED $dst"
+# ---------------------------------------------------------------- GT 去温控
+# 方案来自 Extreme_GT：安装时把原厂温控 XML 改好放在模块里，开机后 bind 挂载覆盖；
+# 再停 OPlus 温控服务、解锁 GPU 上限。官调模式卸载全部挂载并还原。
+ORMS_SVC=vendor.oplus.ormsHalService-aidl-default
+GPU_UNLOCK_ORIG="$STATE/gpu.unlock.orig"
+PROPS_ORIG="$STATE/props.orig"
+ORMS_ORIG="$STATE/orms.orig"
+EXTREME_PATCH="$MODDIR/.astra-thermal-patches"
+EXTREME_TOPS="odm my_product system vendor product"
+
+extreme_walk_mount() { # $1 模块内目录  $2 对应系统目录
+	for f in "$1"/*; do
+		[ -e "$f" ] || continue
+		b=${f##*/}
+		t="$2/$b"
+		if [ -f "$f" ]; then
+			[ -f "$t" ] || continue
+			is_mounted "$t" && continue
+			if mount --bind "$f" "$t" 2>/dev/null; then
+				grep -qxF "$t" "$MNT" 2>/dev/null || echo "$t" >>"$MNT"
+			fi
+		elif [ -d "$f" ] && [ -d "$t" ]; then
+			extreme_walk_mount "$f" "$t"
 		fi
-	done <<EOF
-$(find "$MODDIR/patch" -type f 2>/dev/null)
-EOF
-	mv -f "$MNT.new" "$MNT" 2>/dev/null
-	setprop persist.sys.environment.temp 25 2>/dev/null
-	setprop persist.sys.oplus.wifi.sla.game_high_temperature 50 2>/dev/null
-	ST_THERMAL_OFF=1
+	done
 }
-thermal_off_off() {
+extreme_apply_mounts() {
+	for top in $EXTREME_TOPS; do
+		[ -d "$EXTREME_PATCH/$top" ] || continue
+		extreme_walk_mount "$EXTREME_PATCH/$top" "/$top"
+	done
+}
+extreme_clear_mounts() {
 	if [ -s "$MNT" ]; then
 		while IFS= read -r dst; do
-			[ -n "$dst" ] && is_mounted "$dst" && umount "$dst" 2>/dev/null
+			[ -n "$dst" ] && umount "$dst" 2>/dev/null
 		done <"$MNT"
-		: >"$MNT"
 	fi
+	: >"$MNT"
+}
+extreme_props_on() {
+	if [ ! -s "$PROPS_ORIG" ]; then
+		: >"$PROPS_ORIG"
+		for k in persist.sys.environment.temp persist.sys.orms.name; do
+			printf '%s=%s\n' "$k" "$(getprop "$k" 2>/dev/null)" >>"$PROPS_ORIG"
+		done
+		chmod 0600 "$PROPS_ORIG" 2>/dev/null
+	fi
+	setprop persist.sys.environment.temp 25 2>/dev/null
+	setprop persist.sys.orms.name "" 2>/dev/null
+}
+extreme_props_off() {
+	if [ -s "$PROPS_ORIG" ]; then
+		while IFS='=' read -r k v; do
+			[ -n "$k" ] && setprop "$k" "$v" 2>/dev/null
+		done <"$PROPS_ORIG"
+	fi
+	rm -f "$PROPS_ORIG" 2>/dev/null
+}
+off_orms_stop() {
+	svc=$(getprop "init.svc.$ORMS_SVC" 2>/dev/null)
+	if [ "$svc" = "running" ]; then
+		[ -f "$ORMS_ORIG" ] || { echo running >"$ORMS_ORIG"; chmod 0600 "$ORMS_ORIG" 2>/dev/null; }
+		stop "$ORMS_SVC" >/dev/null 2>&1
+	fi
+	setprop persist.sys.orms.name "" 2>/dev/null
+}
+orms_restore() {
+	if [ -f "$ORMS_ORIG" ]; then
+		[ "$(cat "$ORMS_ORIG" 2>/dev/null)" = running ] && start "$ORMS_SVC" >/dev/null 2>&1
+		 rm -f "$ORMS_ORIG" 2>/dev/null
+	elif [ "$ST_THERMAL_OFF" = "1" ]; then
+		# Upgrade from 0.2.1 did not save the original service state.
+		start "$ORMS_SVC" >/dev/null 2>&1
+	fi
+}
+gpu_unlock() {
+	if [ ! -s "$GPU_UNLOCK_ORIG" ]; then
+		: >"$GPU_UNLOCK_ORIG"
+		for f in /sys/class/kgsl/kgsl-3d0/max_gpu_clk \
+		         /sys/class/kgsl/kgsl-3d0/max_clock_mhz \
+		         /sys/class/kgsl/kgsl-3d0/max_pwrlevel; do
+			[ -e "$f" ] || continue
+			v=""
+			IFS= read -r v <"$f" 2>/dev/null
+			[ -n "$v" ] && echo "$f=$v" >>"$GPU_UNLOCK_ORIG"
+		done
+		chmod 0600 "$GPU_UNLOCK_ORIG" 2>/dev/null
+	fi
+	[ -w /sys/class/kgsl/kgsl-3d0/max_gpu_clk ] && echo 2147483647 >/sys/class/kgsl/kgsl-3d0/max_gpu_clk 2>/dev/null
+	[ -w /sys/class/kgsl/kgsl-3d0/max_clock_mhz ] && echo 2147483647 >/sys/class/kgsl/kgsl-3d0/max_clock_mhz 2>/dev/null
+	[ -w /sys/class/kgsl/kgsl-3d0/max_pwrlevel ] && echo 0 >/sys/class/kgsl/kgsl-3d0/max_pwrlevel 2>/dev/null
+}
+gpu_restore() {
+	if [ -s "$GPU_UNLOCK_ORIG" ]; then
+		while IFS='=' read -r f v; do
+			[ -w "$f" ] && [ -n "$v" ] && echo "$v" >"$f" 2>/dev/null
+		done <"$GPU_UNLOCK_ORIG"
+	fi
+	rm -f "$GPU_UNLOCK_ORIG" 2>/dev/null
+}
+thermal_off_on() {
+	thermal_off_keep
+}
+thermal_mount_count() {
+	MOUNT_COUNT=0
+	[ -s "$MNT" ] || return 0
+	while IFS= read -r _mount_dst; do
+		[ -n "$_mount_dst" ] || continue
+		is_mounted "$_mount_dst" && MOUNT_COUNT=$((MOUNT_COUNT + 1))
+	done <"$MNT"
+}
+thermal_off_keep() {
+	extreme_apply_mounts
+	thermal_mount_count
+	if [ "$MOUNT_COUNT" -gt 0 ]; then
+		extreme_props_on
+		off_orms_stop
+		gpu_unlock
+		[ "$ST_THERMAL_OFF" = "1" ] || log "GT thermal patch active: $MOUNT_COUNT config file(s) mounted"
+		ST_THERMAL_OFF=1
+		rm -f "$STATE/thermal.mount.warn" 2>/dev/null
+	else
+		if [ "$ST_THERMAL_OFF" = "1" ]; then
+			extreme_props_off
+			gpu_restore
+			orms_restore
+		fi
+		ST_THERMAL_OFF=0
+		if [ ! -f "$STATE/thermal.mount.warn" ]; then
+			log "GT thermal patch requested but no matching system config could be mounted"
+			: >"$STATE/thermal.mount.warn"
+		fi
+	fi
+}
+thermal_off_off() {
+	extreme_clear_mounts
+	extreme_props_off
+	gpu_restore
+	orms_restore
 	ST_THERMAL_OFF=0
+	rm -f "$STATE/thermal.mount.warn" 2>/dev/null
+	log "thermal OFF disabled: unmounted, restored"
 }
 thermal_all_clear() { # 官方模式：确保没有任何伪装/挂载残留
 	thermal_off_off
 	mask_off
+	emu_clear_all
 	ST_MASK_LATCH=0
 }
+
+
 
 # ---------------------------------------------------------------- 充电
 OPLUS=/sys/class/oplus_chg/battery
 charge_snapshot() {
 	: >"$STATE/charge.orig"
 	chmod 0600 "$STATE/charge.orig" 2>/dev/null
-	for f in "$BATT/constant_charge_current_max" "$BATT/input_current_limit" \
-		"$USB/input_current_limit" "$USB/current_max" "$OPLUS/fast_charge"; do
-		[ -r "$f" ] || continue
+	# Save only writable limits we actually control. current_max and OPlus fast/cool
+	# nodes are read-only or write-only on this device and cannot be restored safely.
+	for f in "$USB/input_current_limit" "$BATT/input_current_limit"; do
+		[ -r "$f" ] && [ -w "$f" ] || continue
 		IFS= read -r v <"$f" 2>/dev/null
 		[ -n "$v" ] && echo "$f=$v" >>"$STATE/charge.orig"
 	done
 }
-# 满血：输入电流拉到适配器能给的最高值 + 打开快充开关（不改 vendor 的恒流/阶梯算法）
+# Release only Astra's writable input-current limits. Charger negotiation and the
+# vendor's temperature/step-charge policy remain authoritative.
 charge_on() {
 	[ -s "$STATE/charge.orig" ] || charge_snapshot
 	mx=0
 	IFS= read -r mx <"$USB/current_max" 2>/dev/null
 	case "$mx" in ''|*[!0-9]*) mx=0 ;; esac
-	[ -w "$OPLUS/fast_charge" ] && echo 1 >"$OPLUS/fast_charge" 2>/dev/null
+	applied=0
+	controls=0
+	all_at_max=1
 	if [ "$mx" -gt 0 ]; then
-		[ -w "$USB/input_current_limit" ] && echo "$mx" >"$USB/input_current_limit" 2>/dev/null
-		[ -w "$BATT/input_current_limit" ] && echo "$mx" >"$BATT/input_current_limit" 2>/dev/null
+		for f in "$USB/input_current_limit" "$BATT/input_current_limit"; do
+			[ -r "$f" ] && [ -w "$f" ] || continue
+			IFS= read -r old <"$f" 2>/dev/null
+			case "$old" in ''|*[!0-9]*) continue ;; esac
+			controls=$((controls + 1))
+			if [ "$old" -ge "$mx" ]; then continue; fi
+			all_at_max=0
+			echo "$mx" >"$f" 2>/dev/null || continue
+			IFS= read -r actual <"$f" 2>/dev/null
+			[ "$actual" = "$mx" ] && [ "$actual" -gt "$old" ] && applied=1
+		done
 	fi
-	ST_CHARGE_APPLIED=1
+	ST_CHARGE_APPLIED=$applied
+	[ "$applied" = "0" ] && [ "$controls" -gt 0 ] && [ "$all_at_max" = "1" ] && ST_CHARGE_APPLIED=2
+	if [ "$applied" = "1" ]; then
+		ST_CHARGE_WARNED=0
+	elif [ "$ST_CHARGE_APPLIED" = "2" ]; then
+		[ "${ST_CHARGE_WARNED:-0}" = "2" ] || log "charging limit already at negotiated maximum; no Astra input cap to release"
+		ST_CHARGE_WARNED=2
+	else
+		[ "${ST_CHARGE_WARNED:-0}" = "1" ] || log "charging limit request failed: no writable current-limit node accepted negotiated maximum=${mx:-unknown}"
+		ST_CHARGE_WARNED=1
+	fi
 }
 charge_off() {
 	if [ -s "$STATE/charge.orig" ]; then
@@ -398,23 +674,35 @@ charge_off() {
 			[ -w "$f" ] && [ -n "$old" ] && echo "$old" >"$f" 2>/dev/null
 		done <"$STATE/charge.orig"
 	fi
+	# A later plug-in must snapshot the then-current defaults again.
+	rm -f "$STATE/charge.orig" 2>/dev/null
 	ST_CHARGE_APPLIED=0
+}
+charge_keep() {
+	[ "$ST_CHARGE_APPLIED" = "1" ] || return 0
+	charge_online || return 0
+	mx=0
+	IFS= read -r mx <"$USB/current_max" 2>/dev/null
+	case "$mx" in ''|*[!0-9]*) mx=0 ;; esac
+	[ "$mx" -gt 0 ] || { ST_CHARGE_APPLIED=0; return 0; }
+	controls=0
+	failed=0
+	for f in "$USB/input_current_limit" "$BATT/input_current_limit"; do
+		[ -r "$f" ] && [ -w "$f" ] || continue
+		IFS= read -r old <"$f" 2>/dev/null
+		case "$old" in ''|*[!0-9]*) continue ;; esac
+		controls=$((controls + 1))
+		[ "$old" -ge "$mx" ] && continue
+		echo "$mx" >"$f" 2>/dev/null || { failed=1; continue; }
+		IFS= read -r actual <"$f" 2>/dev/null
+		[ "$actual" = "$mx" ] && [ "$actual" -gt "$old" ] || failed=1
+	done
+	[ "$controls" -gt 0 ] && [ "$failed" = "0" ] || ST_CHARGE_APPLIED=0
 }
 charge_online() {
 	IFS= read -r s <"$BATT/status" 2>/dev/null
 	[ "$s" = "Charging" ] || [ "$s" = "Full" ]
 }
-# 系统「智能极速充电」是否开启（模块开启时模块优先）
-smart_charge_sys() {
-	for ns in global system secure; do
-		for k in smart_fast_charge smart_charge oplus_smart_charge smart_charging; do
-			v=$(settings get "$ns" "$k" 2>/dev/null)
-			[ "$v" = "1" ] && return 0
-		done
-	done
-	return 1
-}
-
 # ---- Scene 调度接管检测：Scene 在跑，且给当前前台应用下发了功耗模式 ----
 SCENE_POWERCFG=/data/data/com.omarea.vtools/shared_prefs/powercfg.xml
 SCENE_GAMES=/data/data/com.omarea.vtools/shared_prefs/games.xml
@@ -430,7 +718,7 @@ scene_takes_over() {
 	[ -z "$1" ] && return 1
 	scene_running || return 1
 	m=$(scene_mode_for "$1")
-	case "$m" in ''|igoned) return 1 ;; esac
+	case "$m" in ''|ignore|ignored|igoned) return 1 ;; esac
 	return 0
 }
 
@@ -448,33 +736,47 @@ cc_sample() {
 	IFS= read -r cc <"$BATT/charge_counter" 2>/dev/null
 	case "$cc" in ''|*[!0-9]*) cc=0 ;; esac
 	[ "$cc" -le 0 ] && return 0
-	if [ "$CC_LAST" -gt 0 ] && [ $((now - CC_AT)) -ge 20 ]; then
-		dt=$((now - CC_AT))
-		dc=$((CC_LAST - cc))            # µAh，正=放电
-		CURR_MA=$(( dc * 3600 / dt / 1000 ))
-		# 电量计校准/满电修正会产生离谱差值，直接丢弃
-		[ "$CURR_MA" -gt 12000 ] && CURR_MA=0
-		[ "$CURR_MA" -lt -12000 ] && CURR_MA=0
+	case "$CC_LAST" in ''|*[!0-9]*) CC_LAST=0 ;; esac
+	case "$CC_AT" in ''|*[!0-9]*) CC_AT=0 ;; esac
+	if [ "$CC_LAST" -le 0 ] || [ "$CC_AT" -le 0 ]; then
 		CC_LAST=$cc
 		CC_AT=$now
-		if [ "$CURR_MA" -gt 0 ]; then
-			# 放电会话累计：用于 Scene 同款「平均功耗」
-			DIS_UAH=$(( DIS_UAH + dc ))
-			DIS_SEC=$(( DIS_SEC + dt ))
-			CURR_W=$(( CURR_MA * VB_MV / 1000 ))
-		else
-			# 插电即重置本次放电会话
-			DIS_UAH=0
-			DIS_SEC=0
-			CURR_W=0
-		fi
+		CURR_MA=0
 		AVG_MA=0
-		if [ "$DIS_SEC" -gt 0 ]; then
-			AVG_MA=$(( DIS_UAH * 3600 / DIS_SEC / 1000 ))
-		fi
-	else
+		return 0
+	fi
+	dt=$((now - CC_AT))
+	# The gauge updates coarsely; keep one baseline for a full minute. A long gap
+	# is a suspend/restart boundary, not a valid average-power interval.
+	[ "$dt" -lt 60 ] && return 0
+	if [ "$dt" -gt 180 ]; then
 		CC_LAST=$cc
 		CC_AT=$now
+		CURR_MA=0
+		AVG_MA=0
+		DIS_UAH=0
+		DIS_SEC=0
+		return 0
+	fi
+	dc=$((CC_LAST - cc))            # µAh，正=放电
+	CURR_MA=$(( dc * 3600 / dt / 1000 ))
+	# 电量计校准/满电修正会产生离谱差值，直接丢弃
+	[ "$CURR_MA" -gt 12000 ] && CURR_MA=0
+	[ "$CURR_MA" -lt -12000 ] && CURR_MA=0
+	CC_LAST=$cc
+	CC_AT=$now
+	if [ "$CURR_MA" -gt 0 ]; then
+		DIS_UAH=$(( DIS_UAH + dc ))
+		DIS_SEC=$(( DIS_SEC + dt ))
+	else
+		# 插电或电量计转为充电方向时重置本次放电会话
+		DIS_UAH=0
+		DIS_SEC=0
+	fi
+	AVG_MA=0
+	# 用至少五分钟的样本估算整机平均电流，避免启动瞬态主导结果。
+	if [ "$DIS_SEC" -ge 300 ]; then
+		AVG_MA=$(( DIS_UAH * 3600 / DIS_SEC / 1000 ))
 	fi
 }
 batt_mv() {
@@ -482,25 +784,7 @@ batt_mv() {
 	IFS= read -r v <"$BATT/voltage_now" 2>/dev/null
 	case "$v" in ''|*[!0-9]*) ;; *) VB_MV=$(( v / 1000 )) ;; esac
 }
-avg_from_bstats() {
-	now=$(date +%s)
-	at=${ST_AVG_AT:-0}
-	case "$at" in ''|*[!0-9]*) at=0 ;; esac
-	[ $((now - at)) -lt 600 ] && return 0
-	line=$(dumpsys batterystats --charged 2>/dev/null | grep -m1 "Time on battery:")
-	sec=$(printf '%s' "$line" | awk '{s=0; for(i=1;i<=NF;i++){v=$i; n=v+0; if(v~/h$/)s+=n*3600; else if(v~/m$/)s+=n*60; else if(v~/s$/)s+=n}; print s}')
-	mah=$(dumpsys batterystats --charged 2>/dev/null | grep -m1 "actual drain:" | sed 's/.*actual drain: *\([0-9][0-9]*\).*/\1/')
-	case "$sec" in ''|*[!0-9]*|0) return 0 ;; esac
-	case "$mah" in ''|*[!0-9]*|0) return 0 ;; esac
-	mv=3850
-	IFS= read -r vnow <"$BATT/voltage_now" 2>/dev/null
-	case "$vnow" in ''|*[!0-9]*) ;; *) mv=$((vnow / 1000)) ;; esac
-	ma=$(( mah * 3600 / sec ))
-	ST_AVG_MW=$(( ma * mv / 1000 ))
-	ST_AVG_AT=$now
-}
-
-# 功率（毫瓦）：双电芯机型电池节点报单芯电压，整组 ×2（与若晴/Scene 同口径）
+# 功率（毫瓦）：放电用电量计差分 × 双芯电池电压；充电用 USB 输入侧的实测值。
 pack_mv() {
 	batt_mv
 	PACK_MV=$VB_MV
@@ -510,24 +794,79 @@ power_mw() {
 	PMW=0
 	st=""
 	IFS= read -r st <"$BATT/status" 2>/dev/null
+	if [ "$st" = "Charging" ] || [ "$st" = "Full" ]; then
+		# power_supply exposes current_now in µA and voltage_now in µV.
+		# Compute at the USB input; battery current is not charger input current.
+		IFS= read -r iu <"$USB/current_now" 2>/dev/null
+		IFS= read -r vu <"$USB/voltage_now" 2>/dev/null
+		case "$iu" in ''|*[!0-9-]*) iu=0 ;; esac
+		case "$vu" in ''|*[!0-9]*) vu=0 ;; esac
+		[ "$iu" -lt 0 ] && iu=$(( -iu ))
+		# Scale before multiplying: Android sh uses 32-bit arithmetic on this ROM.
+		[ "$iu" -gt 0 ] && [ "$vu" -gt 0 ] && PMW=$(( (iu / 1000) * (vu / 1000) / 1000 ))
+		return 0
+	fi
 	cm=${CURR_MA:-0}
 	case "$cm" in ''|*[!0-9-]*) cm=0 ;; esac
 	[ "$cm" -lt 0 ] && cm=$(( -cm ))
 	pack_mv
 	[ "$cm" -gt 0 ] && [ "$PACK_MV" -gt 0 ] && PMW=$(( cm * PACK_MV / 1000 ))
-	if [ "$PMW" -le 0 ] || [ "$st" = "Full" ]; then
-		IFS= read -r iu <"$USB/current_now" 2>/dev/null
-		IFS= read -r vu <"$USB/voltage_now" 2>/dev/null
-		case "$iu" in ''|*[!0-9-]*) iu=0 ;; esac; iu=${iu#-}
-		case "$vu" in ''|*[!0-9-]*) vu=0 ;; esac
-		PMW=$(( (iu / 1000) * (vu / 1000) / 1000 ))
-	fi
 }
-avg_power_tick() { # 放电平均功耗（毫瓦，含双电芯整组电压）
-	if charge_online; then return 0; fi
+avg_power_tick() { # 平滑的当前/平均功耗（毫瓦）
+	st=""
+	IFS= read -r st <"$BATT/status" 2>/dev/null
+	case "$st" in Charging|Full) mode=charging ;; *) mode=discharging ;; esac
+	if [ "$mode" != "${ST_AVG_MODE:-}" ]; then
+		ST_AVG_MODE=$mode
+		ST_AVG_MW=0
+		ST_AVG_AT=0
+	fi
+	now=$(date +%s)
+	at=${ST_AVG_AT:-0}
+	case "$at" in ''|*[!0-9]*) at=0 ;; esac
+	[ $((now - at)) -lt 30 ] && return 0
 	power_mw
+	ST_AVG_AT=$now
 	[ "$PMW" -le 0 ] && return 0
-	case "${ST_AVG_MW:-}" in ''|*[!0-9]*) ST_AVG_MW=$PMW ;; *) ST_AVG_MW=$(( (ST_AVG_MW * 9 + PMW) / 10 )) ;; esac
+	case "${ST_AVG_MW:-}" in ''|*[!0-9]*|0) ST_AVG_MW=$PMW ;; *) ST_AVG_MW=$(( (ST_AVG_MW * 9 + PMW) / 10 )) ;; esac
+}
+# 充电功率（毫瓦）：只有“确实在充电”时才非 0。
+# 之前直接把 power_mw 当充电功率：没插电时它算的是放电功率，于是电池页在
+# 未充电状态下也会显示一个“充电功率”。另外部分充电器/PD 场景下 usb/current_now
+# 不刷新，这里退回电池侧（整组电压）估算，避免充电中一直显示 0.0 W。
+charge_power_mw() {
+	CPMW=0
+	_cst=""
+	IFS= read -r _cst <"$BATT/status" 2>/dev/null
+	_chg=0
+	[ "$_cst" = "Charging" ] && _chg=1
+	if [ "$_chg" = "0" ] && [ "$_cst" != "Full" ]; then
+		_bi=0
+		IFS= read -r _bi <"$BATT/current_now" 2>/dev/null
+		case "$_bi" in ''|*[!0-9-]*) _bi=0 ;; esac
+		[ "$_bi" -lt 0 ] && _chg=1   # 负电流 = 流入电池
+	fi
+	[ "$_chg" = "1" ] || return 0
+	_mw=0
+	iu=0
+	vu=0
+	IFS= read -r iu <"$USB/current_now" 2>/dev/null
+	IFS= read -r vu <"$USB/voltage_now" 2>/dev/null
+	case "$iu" in ''|*[!0-9-]*) iu=0 ;; esac
+	case "$vu" in ''|*[!0-9]*) vu=0 ;; esac
+	[ "$iu" -lt 0 ] && iu=$(( -iu ))
+	[ "$iu" -gt 0 ] && [ "$vu" -gt 0 ] && _mw=$(( (iu / 1000) * (vu / 1000) / 1000 ))
+	if [ "$_mw" -le 0 ]; then
+		_bi=0
+		IFS= read -r _bi <"$BATT/current_now" 2>/dev/null
+		case "$_bi" in ''|*[!0-9-]*) _bi=0 ;; esac
+		# 只认负电流（流入电池）；正电流表示整机在净放电，不能算充电功率
+		if [ "$_bi" -lt 0 ]; then _bi=$(( -_bi )); else _bi=0; fi
+		pack_mv
+		[ "$_bi" -gt 0 ] && [ "$PACK_MV" -gt 0 ] && _mw=$(( _bi * PACK_MV / 1000 ))
+	fi
+	[ "$_mw" -gt 300000 ] && _mw=0   # >300W 视为节点异常
+	CPMW=$_mw
 }
 bypass_on() {
 	[ -s "$STATE/bypass.list" ] || find /sys/class/power_supply /sys/class/oplus_chg -maxdepth 3 -type f -name '*bypass*' 2>/dev/null >"$STATE/bypass.list"
@@ -541,7 +880,7 @@ bypass_on() {
 charge_tick() {
 	if ! charge_online; then
 		[ "$CFG_CHARGE_NOW" = "1" ] && { cfg_set CHARGE_NOW 0; CFG_CHARGE_NOW=0; }
-		[ "$ST_CHARGE_APPLIED" = "1" ] && charge_off
+		charge_off
 		ST_CHARGE_START=0
 		ST_CHARGE_GUARD=0
 		return 0
@@ -550,15 +889,15 @@ charge_tick() {
 	want=0
 	[ "$CFG_CHARGE_AUTO" = "1" ] && want=1
 	[ "$CFG_CHARGE_NOW" = "1" ] && want=1
-	[ "$want" = "1" ] || { [ "$ST_CHARGE_APPLIED" = "1" ] && charge_off; ST_CHARGE_GUARD=0; return 0; }
+	[ "$want" = "1" ] || { charge_off; ST_CHARGE_GUARD=0; return 0; }
 	if bypass_on; then
-		[ "$ST_CHARGE_APPLIED" = "1" ] && charge_off
+		charge_off
 		ST_CHARGE_GUARD=0
 		return 0
 	fi
 	real_batt_md
 	if [ "$RB" -gt 0 ] && [ "$RB" -ge "$CFG_CHARGE_TEMP_CUT" ]; then
-		[ "$ST_CHARGE_APPLIED" = "1" ] && charge_off
+		charge_off
 		ST_CHARGE_GUARD=1
 		return 0
 	fi
@@ -567,7 +906,7 @@ charge_tick() {
 	IFS= read -r cap <"$BATT/capacity" 2>/dev/null
 	case "$cap" in ''|*[!0-9]*) cap=0 ;; esac
 	if [ "$cap" -ge 90 ]; then
-		[ "$ST_CHARGE_APPLIED" = "1" ] && charge_off
+		charge_off
 		ST_CHARGE_GUARD=2
 		return 0
 	fi
@@ -598,7 +937,11 @@ caps_read() {
 caps_write() {
 	w=$1
 	while [ "${w% }" != "$w" ]; do w=${w% }; done
-	[ -w "$CAP_NODE" ] && echo "$w" >"$CAP_NODE" 2>/dev/null
+	[ -w "$CAP_NODE" ] || return 1
+	echo "$w" >"$CAP_NODE" 2>/dev/null || return 1
+	_cap_want=$(printf '%s' "$w" | tr -d ' ,')
+	_cap_got=$(cat "$CAP_NODE" 2>/dev/null | tr -d ' ,')
+	[ -n "$_cap_want" ] && [ "$_cap_got" = "$_cap_want" ]
 }
 LITTLE_CAP=1785600
 PRIME_CAP=2246400
@@ -627,7 +970,8 @@ cap_snapshot() {
 save_on() {
 	[ -s "$STATE/caps.orig" ] || cap_snapshot
 	[ -n "$CAP_BASE" ] || { caps_read; CAP_BASE=$CAPS; }
-	caps_write "$SAVE_CAPS"
+	CAP_APPLIED=0
+	caps_write "$SAVE_CAPS" && CAP_APPLIED=1
 	for p in /sys/devices/system/cpu/cpufreq/policy*; do
 		[ -d "$p" ] || continue
 		rc=""
@@ -637,9 +981,20 @@ save_on() {
 		*) tgt=$LITTLE_CAP ;;
 		esac
 		clamp_freq "$p" "$tgt"
-		echo "$CLAMPED" >"$p/scaling_max_freq" 2>/dev/null
+		if [ -w "$p/scaling_max_freq" ]; then
+			echo "$CLAMPED" >"$p/scaling_max_freq" 2>/dev/null
+			IFS= read -r _cap_readback <"$p/scaling_max_freq" 2>/dev/null
+			[ "$_cap_readback" = "$CLAMPED" ] && CAP_APPLIED=1
+		fi
 	done
-	ST_SAVE_APPLIED=1
+	if [ "$CAP_APPLIED" = "1" ]; then
+		ST_SAVE_APPLIED=1
+		ST_CAP_WARNED=0
+	else
+		ST_SAVE_APPLIED=0
+		[ "${ST_CAP_WARNED:-0}" = "1" ] || log "CPU cap request failed: msm_performance and cpufreq nodes did not retain requested values"
+		ST_CAP_WARNED=1
+	fi
 }
 save_off() {
 	[ -n "$CAP_BASE" ] && caps_write "$CAP_BASE"
@@ -678,15 +1033,28 @@ GPU_DISABLED_MAX=832000000
 gpu_tick() {
 	dis=$CFG_DISABLE_GPU_BOOST
 	# 官调限频开启时强制禁用 GPU Boost
-	[ "$CFG_SAVE_ENABLED" = "1" ] && dis=1
+	[ "$ST_SAVE_APPLIED" = "1" ] && dis=1
 	bn=$(kgsl_boost_node)
 	if [ -n "$bn" ]; then
-		if [ "$dis" = "1" ] && [ "$ST_GPU_STATE" != disabled ]; then
-			[ -z "$GPU_BOOST_ORIG" ] && IFS= read -r GPU_BOOST_ORIG <"$bn" 2>/dev/null
-			echo 0 >"$bn" 2>/dev/null
-			ST_GPU_STATE=disabled
-		elif [ "$dis" != "1" ] && [ "$ST_GPU_STATE" != default ]; then
-			echo "${GPU_BOOST_ORIG:-1}" >"$bn" 2>/dev/null
+		current=""
+		IFS= read -r current <"$bn" 2>/dev/null
+		if [ "$dis" = "1" ]; then
+			[ -n "$GPU_BOOST_ORIG" ] || GPU_BOOST_ORIG=$current
+			[ "$current" = "0" ] || echo 0 >"$bn" 2>/dev/null
+			IFS= read -r current <"$bn" 2>/dev/null
+			if [ "$current" = "0" ]; then
+				ST_GPU_STATE=disabled
+				ST_GPU_WARNED=0
+			else
+				ST_GPU_STATE=failed
+				[ "${ST_GPU_WARNED:-0}" = "1" ] || log "GPU DCVS boost node did not accept disable request: $bn value=${current:-unknown}"
+				ST_GPU_WARNED=1
+			fi
+		elif [ -n "$GPU_BOOST_ORIG" ]; then
+			[ "$current" = "$GPU_BOOST_ORIG" ] || echo "$GPU_BOOST_ORIG" >"$bn" 2>/dev/null
+			IFS= read -r current <"$bn" 2>/dev/null
+			[ "$current" = "$GPU_BOOST_ORIG" ] && ST_GPU_STATE=default || ST_GPU_STATE=failed
+		else
 			ST_GPU_STATE=default
 		fi
 		return 0
@@ -755,25 +1123,45 @@ sched_tick() {
 
 # ---------------------------------------------------------------- 掉信号保护
 ST_MODEM_BAD=0
+ST_OP_OK=0      # 本次开机是否见过正常运营商信息（避免开机/无覆盖误判）
+ST_RADIO_LATCH=0
 modem_guard_tick() {
-	[ "$CFG_THERMAL_MODE" = "official" ] && { ST_MODEM_BAD=0; return 0; }
+	if [ "$CFG_THERMAL_MODE" = "official" ]; then
+		ST_MODEM_BAD=0
+		return 0
+	fi
 	air=$(settings get global airplane_mode_on 2>/dev/null)
 	[ "$air" = "1" ] && { ST_MODEM_BAD=0; return 0; }
 	s=$(getprop gsm.sim.state 2>/dev/null)
-	s=${s%%,*}   # 只看 SIM1，副卡槽 ABSENT 属正常
+	op=""
 	case "$s" in
-	*ABSENT*|"")
-		ST_MODEM_BAD=$(( ${ST_MODEM_BAD:-0} + 4 ))
-		if [ "$ST_MODEM_BAD" -ge 180 ]; then
-			log "modem guard: SIM ABSENT ${ST_MODEM_BAD}s -> revert thermal to official"
-			thermal_all_clear
-			cfg_set THERMAL_MODE official
-			CFG_THERMAL_MODE=official
-			ST_MODEM_BAD=0
-		fi
+	*READY*|*LOADED*)
+		# SIM 已加载：再用运营商名判断是否真的注册上了网络。
+		# 掉信号时 SIM 仍是 LOADED，只是注册丢失、运营商变空，旧逻辑只看 ABSENT 抓不到。
+		op=$(getprop gsm.operator.alpha 2>/dev/null)
+		case "$op" in
+		*[!,\ ]*) ST_OP_OK=1; ST_MODEM_BAD=0 ;;
+		*)
+			if [ "$ST_OP_OK" = "1" ]; then
+				ST_MODEM_BAD=$(( ${ST_MODEM_BAD:-0} + 4 ))
+			else
+				ST_MODEM_BAD=0
+			fi
+			;;
+		esac
 		;;
-	*) ST_MODEM_BAD=0 ;;
+	*ABSENT*)
+		[ "$ST_OP_OK" = "1" ] && ST_MODEM_BAD=$(( ${ST_MODEM_BAD:-0} + 4 )) || ST_MODEM_BAD=0
+		;;
+	*) ST_MODEM_BAD=0 ;; # Unknown during boot is not evidence that the SIM disappeared.
 	esac
+	[ "${ST_MODEM_BAD:-0}" -ge 90 ] || return 0
+	log "modem guard: radio lost ${ST_MODEM_BAD}s (sim=[$s] op=[$op]) -> revert thermal to official"
+	ST_RADIO_LATCH=1
+	thermal_all_clear
+	cfg_set THERMAL_MODE official
+	CFG_THERMAL_MODE=official
+	ST_MODEM_BAD=0
 }
 
 VIDEO_PKGS="com.bilibili.app.in tv.danmaku.bili com.google.android.youtube com.tencent.qqlive com.qiyi.video com.youku.phone com.netflix.mediaclient com.mxtech.videoplayer.ad org.videolan.vlc com.ss.android.ugc.aweme com.coloros.video"
@@ -788,7 +1176,7 @@ music_playing() {
 	dumpsys media_session 2>/dev/null | grep -q "state=PlaybackState {state=3"
 }
 in_call() {
-	dumpsys telephony.registry 2>/dev/null | grep -q "mCallState=1"
+	dumpsys telephony.registry 2>/dev/null | grep -qE 'mCallState=[12]'
 }
 DS_AT=0
 deep_sleep_tick() {
@@ -813,13 +1201,15 @@ deep_sleep_off() {
 # ---------------------------------------------------------------- 使用统计（Scene 式自采样）
 USAGE_DB="$STATE/usage.db"
 screen_on() {
+	found=0
 	for f in /sys/class/backlight/*/brightness /sys/class/leds/lcd-backlight/brightness; do
 		[ -r "$f" ] || continue
 		IFS= read -r b <"$f" 2>/dev/null
 		case "$b" in ''|*[!0-9]*) continue ;; esac
+		found=1
 		[ "$b" -gt 0 ] && return 0
-		return 1
 	done
+	[ "$found" = "1" ] && return 1
 	return 0
 }
 usage_sample() {
@@ -833,16 +1223,22 @@ usage_sample() {
 	[ -z "$p" ] && return 0
 	# 本次 30 秒里的电量消耗（µAh）：放电时用库仑计电流，充电时用 USB 输入折算成等效电流
 	add=0
-	eff=${CURR_MA:-0}
-	case "$eff" in ''|*[!0-9-]*) eff=0 ;; esac
-	if [ "$eff" -le 0 ]; then
+	eff=0
+	bs=""
+	IFS= read -r bs <"$BATT/status" 2>/dev/null
+	if [ "$bs" = "Charging" ] || [ "$bs" = "Full" ]; then
 		iu=0; vu=0
 		IFS= read -r iu <"$USB/current_now" 2>/dev/null
 		IFS= read -r vu <"$USB/voltage_now" 2>/dev/null
 		case "$iu" in ''|*[!0-9-]*) iu=0 ;; esac; iu=${iu#-}
 		case "$vu" in ''|*[!0-9-]*) vu=0 ;; esac
 		umw=$(( (iu / 1000) * (vu / 1000) / 1000 ))
-		[ "$umw" -gt 0 ] && [ "${VB_MV:-0}" -gt 0 ] && eff=$(( umw * 1000 / VB_MV ))
+		# Convert USB power to equivalent pack current; do_apps multiplies by PACK_MV later.
+		pack_mv
+		[ "$umw" -gt 0 ] && [ "${PACK_MV:-0}" -gt 0 ] && eff=$(( umw * 1000 / PACK_MV ))
+	else
+		eff=${CURR_MA:-0}
+		case "$eff" in ''|*[!0-9-]*) eff=0 ;; esac
 	fi
 	[ "$eff" -gt 0 ] && add=$(( eff * 30 * 1000 / 3600 ))
 	new="$STATE/usage.db.new"
@@ -869,30 +1265,40 @@ tick() {
 	cfg_load
 	st_load
 	ensure_zone_cache
-	case "$CFG_THERMAL_MODE" in
-	mask)
-		[ "$ST_THERMAL_OFF" = "1" ] && thermal_off_off
-		mask_tick
-		;;
-	off)
-		[ "$ST_MASK_ACTIVE" = "1" ] && mask_off
-		[ "$ST_THERMAL_OFF" = "1" ] || thermal_off_on
-		;;
-	*)
-		[ "$ST_THERMAL_OFF" = "1" ] && thermal_off_off
-		[ "$ST_MASK_ACTIVE" = "1" ] && mask_off
-		;;
-	esac
-	# 保底：清理旧版本可能残留的 Scene 假温度挂载
-	[ "$CFG_SCENE_SEES_FAKE" = "1" ] || scene_spoof_off
-	modem_guard_tick
+	if mode_lock_acquire; then
+		# The WebUI and daemon share one mode transaction. Reload after locking so a
+		# stale daemon read cannot immediately undo a just-committed user selection.
+		cfg_load
+		st_load
+		case "$CFG_THERMAL_MODE" in
+		mask)
+			[ "$ST_THERMAL_OFF" = "1" ] && thermal_off_off
+			mask_tick
+			;;
+		off)
+			[ "$ST_MASK_ACTIVE" = "1" ] && mask_off
+			thermal_off_keep
+			;;
+		*)
+			[ "$ST_THERMAL_OFF" = "1" ] && thermal_off_off
+			[ "$ST_MASK_ACTIVE" = "1" ] && mask_off
+			;;
+		esac
+		# 清理旧版本可能残留的 Scene 假温度挂载。
+		[ "$CFG_SCENE_SEES_FAKE" = "1" ] || scene_spoof_off
+		modem_guard_tick
+		st_save
+		mode_lock_release
+	fi
+	cfg_load
+	st_load
 	batt_mv
 	cc_sample
 	charge_tick
+	charge_keep
+	avg_power_tick
 	sched_tick
 	deep_sleep_tick
-	# 电量计还没攒够样本时，用 batterystats 兜底
-	[ "$AVG_MA" -le 0 ] && avg_from_bstats
 	[ -f "$DEV_CACHE" ] || cache_device
 	usage_sample
 	update_prop
@@ -907,7 +1313,7 @@ update_prop() {
 	off) tw="去温控" ;;
 	*) tw="官方温控" ;;
 	esac
-	[ "$ST_CHARGE_APPLIED" = "1" ] && cw="满血中" || cw="官方"
+	[ "$ST_CHARGE_APPLIED" = "1" ] && cw="已解除模块限流" || cw="官方"
 	[ "$CFG_SAVE_ENABLED" = "1" ] && sw="限频中" || sw="关"
 	sed -i "s@^description=.*@description=为Realme GT7 Pro定制的模块，功能为温控·电池·调度相关。私人定制切勿分享。当前状态：运行中 / 温控 $tw / 充电 $cw / 调度 $sw@" \
 		"$MODDIR/module.prop" 2>/dev/null

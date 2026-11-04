@@ -1,4 +1,4 @@
-/* Astra WebUI  Beta0.1.07
+/* Astra WebUI  Beta0.2.8
  * 桥接层兼容 KernelSU / SukiSU / MMRL 的三种 exec 调用形态（参考实机可用的模块写法）：
  *   1) api.exec(cmd)             → string | Promise<string|{errno,stdout}>
  *   2) api.exec(cmd, cb)         → cb(errno, stdout, stderr)
@@ -32,16 +32,18 @@
       wall: "拉高真实温控墙", wall_s: "两条熔断线整体上移 3℃",
       fb: "电池熔断", fs: "SoC 熔断",
       offt: "GT去温控", offd: "替换厂商温控策略表，关闭软降级；硬件过温关机保护始终保留。",
-      patch: "补丁状态", unmounted: "未挂载",
+      patch: "补丁状态", unmounted: "未挂载", mountedCount: "项策略表已挂载", patchUnavailable: "未找到可用策略表",
       pw: "充电功率", charging: "充电中", notch: "未充电", fulled: "已充满",
       notplug: "未连接充电器", dur: "充电时长", btemp: "电池温度",
-      chg_full: "已接管：满血充电（90% 前最快）", chg_hot: "温度到线，已交还官方充电",
+      chg_full: "模块可控限流已解除；实际速度由原厂充电策略决定", chg_atmax: "当前已到协商电流上限，Astra 没有额外限流可解除", chg_unavailable: "系统未接受解除限流请求，当前按原厂策略充电", chg_hot: "温度到线，已交还官方充电",
       chg_90: "已到 90%，交还官方阶梯充电", chg_off: "未接管，官方策略",
-      admax: "本次接口上限", simax: "系统智能极速充电",
-      autot: "每次充电自动满血", autos: "插电接管，拔线还原",
-      nowbtn: "本次充电满血", notice: "当前充电已开启满血充电",
+      chg_idle: "已连接充电器，当前未在充电",
+      hint_radio: "检测到信号异常，已自动交还官方温控",
+      
+      autot: "每次充电请求解除模块限流", autos: "只释放模块可控的限流项；充电速度仍由原厂策略决定",
+      nowbtn: "本次充电请求解除模块限流", nowoff: "取消本次充电请求",
       cut: "温度保护线", cuth: "到达保护线或电量 90% 自动交还官方充电策略。",
-      deep: "深度睡眠", deep_s: "熄屏 20 秒且未充电进入 doze；音乐/通话/亮屏/充电立即退出",
+      deep: "深度睡眠", deep_s: "锁屏后进入 Android Doze 降低待机耗电；白名单应用按系统规则运行，亮屏或充电立即解除",
       deep_on: "已进入深度睡眠", deep_off: "待机中，未进入深度睡眠",
       bit_hint: "电池详情（剩余电量 / 健康度 / 循环 / 容量曲线）将在 Astra App 提供。",
       remain: "剩余电量", percent: "电量百分比", health: "电池健康", design: "设计容量",
@@ -51,7 +53,8 @@
       save: "官调限频", save_s: "官方调度不变，只封顶最高频率",
       gamehint: "游戏中会自动暂停限频，退出游戏后恢复；检测到 Scene 正在调度前台应用时也会自动让出。",
       gpu: "禁用 GPU Boost", gpu_s: "开启则关闭 GPU 的 DCVS 提升；关闭为系统默认",
-      gpu_forced: "官调限频开启时强制禁用", gpu_free: "可自由开关",
+      gpu_forced: "官调限频开启时强制禁用", gpu_free: "可自由开关", gpu_failed: "DCVS 节点未接受设置",
+      cap_failed: "限频节点未接受设置",
       apps: "耗电统计", avgpow: "平均功耗", curw: "当前功耗", appavg: "平均",
       appsh: "按 Astra 自安装后的前台采样统计，mAh 由整机电流折算，仅供参考。",
       appsnone: "暂无记录",
@@ -81,16 +84,18 @@
       wall: "Raise thermal wall", wall_s: "Both fuse lines move up by 3°C",
       fb: "Battery fuse", fs: "SoC fuse",
       offt: "GT thermal off", offd: "Replaces vendor thermal tables and soft steps; the hardware shutdown net stays.",
-      patch: "Patch state", unmounted: "Not mounted",
+      patch: "Patch state", unmounted: "Not mounted", mountedCount: "thermal tables mounted", patchUnavailable: "No compatible table found",
       pw: "Power", charging: "Charging", notch: "Not charging", fulled: "Full",
       notplug: "No charger", dur: "Duration", btemp: "Battery temp",
-      chg_full: "Active: full speed (until 90%)", chg_hot: "Temp guard — official charging",
+      chg_full: "Module controlled limits released; OEM charging policy determines the rate", chg_atmax: "Already at the negotiated current limit; Astra has no extra limit to release", chg_unavailable: "System did not accept the request; OEM charging policy remains active", chg_hot: "Temp guard — official charging",
       chg_90: "90% reached — official step charging", chg_off: "Not active — official policy",
-      admax: "Port limit", simax: "System smart charge",
-      autot: "Full speed every charge", autos: "Applies on plug-in, reverts on unplug",
-      nowbtn: "Full speed this charge", notice: "Full-speed charging enabled for this session",
+      chg_idle: "Charger connected, not charging right now",
+      hint_radio: "Radio issue detected — handed back to official thermal",
+      
+      autot: "Request limit release on every charge", autos: "Releases only limits controlled by Astra; OEM policy still sets the rate",
+      nowbtn: "Request limit release this charge", nowoff: "Cancel this charge request",
       cut: "Temperature guard", cuth: "Reverts at the guard temperature or 90% charge.",
-      deep: "Deep sleep", deep_s: "Doze 20s after screen off; music/calls/screen/charging exit it",
+      deep: "Deep sleep", deep_s: "Enter Android Doze after screen-off to reduce idle drain; apps follow system whitelist rules. Screen-on or charging exits it.",
       deep_on: "In deep sleep", deep_off: "Idle, not in deep sleep",
       bit_hint: "Battery details (remaining / health / cycles / curve) arrive with the Astra App.",
       remain: "Remaining", percent: "Level", health: "Health", design: "Design",
@@ -100,7 +105,8 @@
       save: "Official-clock cap", save_s: "Official governor unchanged, only the ceiling drops",
       gamehint: "The cap pauses in games, and yields when Scene is scheduling the foreground app.",
       gpu: "Disable GPU Boost", gpu_s: "Turns off the GPU DCVS boost; off = system default",
-      gpu_forced: "Forced while the clock cap is on", gpu_free: "Free to toggle",
+      gpu_forced: "Forced while the CPU cap is applied", gpu_free: "Free to toggle", gpu_failed: "DCVS node did not accept the setting",
+      cap_failed: "CPU cap node did not accept the setting",
       apps: "Battery usage", avgpow: "Avg power", curw: "Now", appavg: "avg",
       appsh: "Sampled by Astra since install; mAh is derived from device current.",
       appsnone: "No records",
@@ -117,8 +123,103 @@
     }
   };
   var CHANGELOG = {
-    zh: "Beta0.2.0\n· 温控：切换模式显示 5 秒“正在切换/已生效”，GT去温控明确提示需重启\n· 温控：只保留降温策略表补丁（不再动 ThermalService 全局配置与高温保护阈值），并新增掉信号保护（射频热区不碰、SIM 异常自动回官方、15 分钟 3 次重启强制安全模式）\n· 电池：修复功率显示需要手动刷新；满血充电改为拉满输入电流+快充开关，90% 交还官方阶梯充电，保留温度保护\n· 电池：电池信息栏改为 Coming Soon\n· 调度：官调限频强化（同时写 msm_performance 与各 policy），内置双电芯补偿，游戏/横屏非视频自动交还，新增深度睡眠\n· 界面：星空效果、GitHub 入口、排版微调\n\nBeta0.1.13\n· 禁用 GPU Boost 语义纠正\n\nBeta0.1.12\n· 耗电统计 Coming Soon\n\nBeta0.1.11\n· 当前功耗带符号；平均功耗改为放电会话平均",
-    en: "Beta0.2.0\n· Thermal: 5s switching overlay; GT mode shows a reboot note\n· Thermal: only strategy tables are patched (ThermalService and high-temp thresholds untouched); new signal guard (RF zones skipped, SIM-absent auto revert, safe mode after 3 fast boots)\n· Battery: power refreshes on its own; full-speed charging raises input current + fast-charge flag, hands back at 90%, keeps the temperature guard\n· Battery: info grid is Coming Soon\n· Sched: stronger official-clock cap, built-in dual-cell compensation, landscape non-video hands back, new deep sleep\n· UI: starfield, GitHub link, layout polish\n\nBeta0.1.13\n· GPU Boost switch semantics fixed\n\nBeta0.1.12\n· Usage card is a placeholder\n\nBeta0.1.11\n· Signed current power; session-average power"
+    zh: [
+      { version: "Beta0.2.8", groups: [
+        ["修复", [
+          "温控：温度伪装不再写 socd 热区。该热区是整摄氏度单位、带 100℃ 硬件 trip，写毫摄氏度会被固件当成 30100℃ 极端过温，触发厂商紧急保护导致掉信号（实测：开启伪装 5 秒内语音/数据全部 OUT_OF_SERVICE、运营商清空，关闭后立即恢复）。",
+          "温控：伪装写入前校验“热区序号仍指向原传感器名”，序号变化时自动重建缓存，避免热区重排后写错传感器。",
+          "温控：开机和切换模式时全量清除其它热区的仿真值，清理旧版本残留；停用伪装后按记录精确清零。",
+          "电池：充电功率只在真正充电时显示；未充电、已充满时显示 0.0 W，不再把放电功率当成充电功率。",
+          "电池：USB 输入节点不刷新时退回电池侧（整组电压）估算，避免充电中显示 0.0 W。",
+          "信号：SIM 仍为 LOADED 但注册/运营商丢失时，90 秒后自动交还官方温控（旧逻辑只判断 ABSENT，双卡机型不会触发）。"
+        ]],
+        ["优化", [
+          "界面：充电状态按实际状态显示充电中 / 已充满 / 未充电，并区分“已连接但未充电”。",
+          "温控：掉信号自动交还官方后，温控页会提示“检测到信号异常，已自动交还官方温控”。"
+        ]]
+      ]},
+      { version: "Beta0.2.7", groups: [
+        ["修复", ["调度：平均功耗改用平滑的 30 秒采样，充放电切换或重启后重新建立基线，避免短采样造成读数跳变。"]],
+        ["优化", ["调度：恢复当前功耗、平均功耗和最近三款应用的名称、时长、耗电量与平均功耗显示。"]],
+        ["移除", ["统计：首次升级时备份并清空旧的单电芯口径应用记录，避免双电芯耗电量显示偏低。"]]
+      ]},
+      { version: "Beta0.2.6", groups: [
+        ["修复", ["调度：充电时以双电芯总电压换算 USB 功率对应的等效电池电流，避免应用平均功耗估高一倍。"]]
+      ]},
+      { version: "Beta0.2.5", groups: [
+        ["修复", ["日志：调试报告对不存在的电池限流节点显示“不可用”，不再复用上一条节点的旧值。"]],
+        ["优化", ["电池：电量统计与应用耗电估算统一使用双电芯总电压，充电器 USB 输入功率仍按输入侧实测值计算。"]]
+      ]},
+      { version: "Beta0.2.4", groups: [
+        ["修复", ["电池：避免 Android sh 在 USB 电流与电压乘法中发生 32 位溢出，修正充电功率异常偏低。"]],
+        ["优化", ["状态：先换算为 mA 与 mV 再计算 USB 输入功率，保证低功耗与高功耗读数都在整数范围内。"]]
+      ]},
+      { version: "Beta0.2.3", groups: [
+        ["新增", ["温控：启动时清理旧守护进程 PID，避免 PID 被其他系统服务复用后跳过 Astra 启动。"]],
+        ["修复", ["安装：修正模块属性编码，避免 SukiSU 将 Astra 识别为重复目录并导致管理器异常。", "温控：把补丁表存到模块内部隐藏目录，只在 GT 去温控模式手动挂载；官方模式不再被元模块自动覆盖。", "电池：充电功率改读 USB 输入电流和电压，停止用电池侧电流推算充电瓦数。", "充电：只报告已被可写电流节点回读确认的限流解除结果；无可用节点或已经达到协商上限时明确显示状态。", "充电：本次充电请求按钮现在可以取消，未生效时不再展示成功提示。"]],
+        ["优化", ["安装：缩短刷入分隔线，避免 Astra 标题错位换行。", "日志：补充 USB 输入、电量计与充电节点诊断信息。", "界面：温控状态按真实挂载数量显示，并继续按新增、修复、优化、移除分类展示更新日志。"]],
+        ["移除", ["充电：移除对只读快充状态和厂商私有温控节点的写入尝试，避免将无效写操作标记为成功。"]]
+      ]},
+      { version: "Beta0.2.2", groups: [
+        ["新增", ["温控：GT 去温控仅替换保留全部等级的厂商策略表；不修改射频、电池、相机和硬件过温保护配置。", "状态：显示成功挂载的策略表数量；调度页区分配置开关与实际限频结果。"]],
+        ["修复", ["安装：构建包清除 module.prop 的 UTF-8 BOM，避免 SukiSU 将模块识别成第二个目录。", "温控：模式先写入配置并与后台串行执行，重启后不再被旧防变砖逻辑覆盖。", "电池：修复页面访问已删除控件造成的 JavaScript 异常。", "调度：每轮重新应用并回读 GPU DCVS 状态；Scene 的 ignored 标记按接管规则处理。"]],
+        ["优化", ["温控：保留厂商策略表全部等级并校验挂载文件；无有效策略时不会伪报成功。", "日志：限制日志文件大小并滚动保留；debug 报告包含挂载、GPU、充电和 CPU 上限状态。", "深度睡眠：说明改为 Android Doze 行为，提示应用通知受系统白名单与维护窗口规则影响。"]],
+        ["移除", ["电池：删除无效的接口上限和系统智能极速充电展示。"]]
+      ]},
+      { version: "Beta0.2.1", groups: [
+        ["新增", ["温控：引入厂商温控策略表挂载方案。", "调度：加入锁屏深度睡眠选项。"]],
+        ["修复", ["修复模块属性 BOM、温控模式重启回退、满血充电控制及更新日志脚本问题。"]],
+        ["优化", ["改进刷入提示与版本显示。"]],
+        ["移除", ["删除两个无法控制硬件的电池状态项。"]]
+      ]},
+      { version: "Beta0.2.0", groups: [["新增", ["温控模式切换提示、策略表补丁和掉信号保护。", "电池功率自动刷新与充电控制。", "官调限频、GPU Boost 开关和深度睡眠。", "星空 WebUI 与 GitHub 入口。"]]] }
+    ],
+    en: [
+      { version: "Beta0.2.8", groups: [
+        ["Fixed", [
+          "Thermal: masked temperature no longer writes the socd zone. That zone is whole-°C and has a 100 °C hardware trip, so a millidegree value reads as 30100 °C and triggers OEM emergency protection — the radio drops (reproduced: voice and data OUT_OF_SERVICE, operator cleared within 5 s of enabling the mask, recovered immediately after disabling).",
+          "Thermal: every masked write re-checks that the cached zone index still resolves to the intended sensor name; the cache is rebuilt when indices move, so a reordered zone can never be spoofed.",
+          "Thermal: clears emulation on all zones at boot and on mode changes to remove leftovers, and clears exactly the zones it wrote when masking stops.",
+          "Battery: charging power is only shown while actually charging; unplugged or full batteries show 0.0 W instead of discharge power.",
+          "Battery: falls back to the battery-side estimate (dual-cell pack voltage) when the USB input node does not refresh, so a charging phone no longer shows 0.0 W.",
+          "Radio: if the SIM is still LOADED but registration/operator is lost, Astra hands the thermal policy back to official after 90 s (the old check only matched ABSENT, which never fires on dual-SIM phones)."
+        ]],
+        ["Optimized", [
+          "UI: charging state shows Charging / Full / Not charging from the real battery status and distinguishes a connected-but-idle charger.",
+          "Thermal: the thermal page explains when the radio guard handed control back to the official policy."
+        ]]
+      ]},
+      { version: "Beta0.2.7", groups: [
+        ["Fixed", ["Scheduling: smooth average power over 30-second samples and reset its baseline after reboot or charge-state changes, preventing short samples from spiking the result."]],
+        ["Optimized", ["Scheduling: restore current and average power plus the three most recent apps with duration, estimated energy and average power."]],
+        ["Removed", ["Statistics: back up and clear legacy single-cell app samples on upgrade so dual-cell energy totals are not understated."]]
+      ]},
+      { version: "Beta0.2.6", groups: [
+        ["Fixed", ["Scheduling: convert USB input power to equivalent battery current with the dual-cell pack voltage, preventing per-app average power from being doubled while charging."]]
+      ]},
+      { version: "Beta0.2.5", groups: [
+        ["Fixed", ["Logs: show missing battery limit nodes as unavailable instead of reusing a previous node's value."]],
+        ["Optimized", ["Battery: use the dual-cell pack voltage for battery and app drain estimates; USB input power remains measured on the input side."]]
+      ]},
+      { version: "Beta0.2.4", groups: [
+        ["Fixed", ["Battery: avoid 32-bit overflow in Android shell arithmetic when multiplying USB current and voltage."]],
+        ["Optimized", ["Status: scale to mA and mV before calculating USB input power so low and high readings stay in range."]]
+      ]},
+      { version: "Beta0.2.3", groups: [
+        ["Added", ["Thermal: clear stale daemon PID state at boot so a reused system PID cannot suppress Astra startup."]],
+        ["Fixed", ["Install: correct module metadata encoding to prevent SukiSU duplicate-directory recognition.", "Thermal: keep patched tables outside auto-mounted partition directories and mount them only in GT mode.", "Battery: read USB input current and voltage for charging power instead of estimating it from battery-side current.", "Charging: report a limit release only after a writable current node accepts and reads back the value; explain when the negotiated limit is already reached.", "Charging: allow canceling the current-session request and show no success state unless a node confirms it."]],
+        ["Optimized", ["Installer: shorten banner separators to keep Astra aligned.", "Logs: include USB input, battery gauge and charging-node diagnostics.", "UI: show mounted thermal tables and categorize changelog entries."]],
+        ["Removed", ["Charging: stop writing read-only fast-charge and private vendor thermal nodes, and stop marking those writes as successful."]]
+      ]},
+      { version: "Beta0.2.2", groups: [
+        ["Added", ["Thermal: GT mode patches vendor strategy tables while retaining all levels; radio, battery, camera and hardware over-temperature files stay intact.", "Status: show mounted table count and distinguish scheduler setting from applied CPU caps."]],
+        ["Fixed", ["Install: strip UTF-8 BOM from module.prop to prevent SukiSU creating a duplicate module directory.", "Thermal: serialize mode changes and persist them before applying, preventing stale boot logic from reverting the mode.", "Battery: remove stale WebUI selectors that caused a JavaScript exception.", "Scheduling: reapply and read back GPU DCVS state each cycle; recognize Scene's ignored marker."]],
+        ["Optimized", ["Thermal: retain and validate every vendor strategy level; report unavailable when no valid table can be mounted.", "Logs: rotate bounded logs; debug report includes mounts, GPU, charging and CPU cap state.", "Deep sleep: explain Android Doze and note that notifications follow Android whitelist and maintenance-window rules."]],
+        ["Removed", ["Battery: remove the ineffective adapter-limit and smart-charge status rows."]]
+      ]},
+      { version: "Beta0.2.1", groups: [["Added", ["Vendor thermal table patching and screen-off deep sleep."]], ["Fixed", ["Module BOM, thermal mode rollback, charging controls and changelog script issues."]], ["Optimized", ["Installer banner and version display."]], ["Removed", ["Two battery status items without hardware control."]]] },
+      { version: "Beta0.2.0", groups: [["Added", ["Thermal switch feedback and safety handling.", "Automatic charging status and controls.", "CPU caps, GPU Boost control and deep sleep.", "Starfield WebUI and GitHub link."]]] }
+    ]
   };
 
   function $(s, r) { return (r || document).querySelector(s); }
@@ -248,8 +349,11 @@
       $("#tmode").textContent = t("off"); $("#tmode").className = "pill on";
       $("#tbig").textContent = c(mk.real_batt); $("#thint").textContent = t("hint_off");
     } else {
-      $("#tmode").textContent = t("official"); $("#tmode").className = "pill";
-      $("#tbig").textContent = c(mk.real_batt); $("#thint").textContent = t("hint_official");
+      var radio = Number(mk.radio) === 1;
+      $("#tmode").textContent = t("official");
+      $("#tmode").className = "pill" + (radio ? " warn" : "");
+      $("#tbig").textContent = c(mk.real_batt);
+      $("#thint").textContent = radio ? t("hint_radio") : t("hint_official");
     }
     $("#rbatt").textContent = c(mk.real_batt) + "°";
     $("#rsoc").textContent = c(mk.real_soc) + "°";
@@ -266,37 +370,44 @@
     var wall = Number(mk.wall) ? 3000 : 0;
     $("#fuseB").textContent = c(Number(mk.fuse_batt) + wall) + "°";
     $("#fuseS").textContent = c(Number(mk.fuse_soc) + wall) + "°";
-    $("#offState").textContent = Number(s.thermal.off) ? t("on") : t("offs");
+    var mounts = Number(s.thermal.mounts || 0);
+    $("#offState").textContent = mounts > 0 ? mounts + " " + t("mountedCount") : t("patchUnavailable");
+    $("#offState").className = mounts > 0 ? "state-ok" : "state-warn";
 
     var online = Number(ch.online), applied = Number(ch.applied);
-    $("#cstate").textContent = online ? (ch.status === "Full" ? t("fulled") : t("charging")) : t("notch");
-    $("#cstate").className = "pill" + (online ? " on" : "");
+    var cst = String(ch.status || "");
+    $("#curPower").textContent = signed(ch.cur);
+    $("#avgPower").textContent = (Number(ch.avg || 0) / 1000).toFixed(2) + " W";
+    $("#cstate").textContent = online
+      ? (cst === "Full" ? t("fulled") : cst === "Charging" ? t("charging") : t("notch"))
+      : t("notch");
+    $("#cstate").className = "pill" + (online && cst === "Charging" ? " on" : "");
     $("#cw").textContent = (Number(ch.watts) / 1000).toFixed(1);
     var guard = Number(ch.guard);
-    $("#chint").textContent = online
-      ? (applied ? t("chg_full")
-        : guard === 1 ? t("chg_hot")
-          : guard === 2 ? t("chg_90")
-            : t("chg_off"))
-      : t("notplug");
+    $("#chint").textContent = !online
+      ? t("notplug")
+      : (cst !== "Charging" && cst !== "Full") ? t("chg_idle")
+        : applied === 1 ? t("chg_full")
+          : applied === 2 ? t("chg_atmax")
+            : guard === 1 ? t("chg_hot")
+              : guard === 2 ? t("chg_90")
+                : (Number(ch.auto) || Number(ch.now)) ? t("chg_unavailable")
+                : t("chg_off");
     $("#ctime").textContent = fmt(ch.elapsed);
     $("#ctemp").textContent = c(ch.temp) + "°";
     $("#cutVal").textContent = Math.round(Number(ch.cut) / 1000) + "°";
     $("#cut").value = Math.round(Number(ch.cut) / 1000);
-    $("#cnotice").hidden = Number(ch.now) !== 1;
     $("#chargeNow").classList.toggle("on", Number(ch.now) === 1);
-    var am = Number(ch.admax || 0);
-    $("#admax").textContent = am > 0 ? (am / 1000).toFixed(1) + " W" : "—";
-    $("#simax").textContent = Number(ch.smart) ? t("on") : t("offs");
-
+    $("#chargeNow").textContent = Number(ch.now) === 1 ? t("nowoff") : t("nowbtn");
+    var capApplied = Number(sc.save_applied) === 1;
     $("#sstate").textContent = Number(sc.scene) ? t("sceneon")
       : Number(sc.game) ? t("ingame")
-        : (Number(sc.save) ? t("capped") : t("uncapped"));
-    $("#sstate").className = "pill" + (Number(sc.save) || Number(sc.scene) ? " on" : "");
+        : (Number(sc.save) ? (capApplied ? t("capped") : t("cap_failed")) : t("uncapped"));
+    $("#sstate").className = "pill" + (capApplied || Number(sc.scene) ? " on" : Number(sc.save) ? " warn" : "");
     $("#caps").textContent = (Number(sc.little) / 1e6).toFixed(2) + " / " + (Number(sc.prime) / 1e6).toFixed(2);
     $("#shint").textContent = Number(sc.scene) ? t("sceneon")
       : Number(sc.game) ? t("ingame")
-        : (Number(sc.save) ? t("capped") : t("uncapped"));
+      : (Number(sc.save) ? (capApplied ? t("capped") : t("cap_failed")) : t("uncapped"));
 
     $("#dModel").textContent = s.device.model;
     $("#dRom").textContent = s.device.rom;
@@ -311,7 +422,7 @@
       if (k === "DISABLE_GPU_BOOST") {
         var forced = Number(sc.gpu_forced) === 1;
         sw.classList.toggle("dim", forced);
-        $("#gpuHint").textContent = forced ? t("gpu_forced") : t("gpu_free");
+        $("#gpuHint").textContent = sc.gpu_state === "failed" ? t("gpu_failed") : forced ? t("gpu_forced") : t("gpu_free");
       }
       if (k === "DEEP_SLEEP") {
         $("#deepHint").textContent = Number(sc.dsactive) ? t("deep_on") : t("deep_off");
@@ -323,7 +434,9 @@
     sec = Number(sec || 0);
     if (!sec) return "—";
     var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
-    return h > 0 ? h + "h " + m + "m" : m + "m";
+    if (h > 0) return h + "h " + m + "m";
+    if (m > 0) return m + "m";
+    return Math.floor(sec) + "s";
   }
   function signed(mw) {
     var v = Number(mw || 0) / 1000;
@@ -339,6 +452,47 @@
     return Math.floor(sec / 86400) + " " + t("agod");
   }
 
+  function loadApps(force) {
+    if (!MOD) return Promise.resolve();
+    var now = Date.now();
+    if (!force && now - appsAt < 30000) return Promise.resolve();
+    appsAt = now;
+    return astra("apps").then(function (out) {
+      var items;
+      try { items = JSON.parse(out); } catch (e) { throw new Error("apps-json"); }
+      var root = $("#appsList");
+      while (root.firstChild) root.removeChild(root.firstChild);
+      if (!Array.isArray(items) || !items.length) {
+        var empty = document.createElement("div"); empty.className = "apps-empty";
+        empty.textContent = t("appsnone"); root.appendChild(empty); return;
+      }
+      var maxMah = Math.max.apply(null, items.map(function (x) { return Number(String(x.mah || "0").replace(/[^0-9.]/g, "")) || 0; })) || 1;
+      items.slice(0, 3).forEach(function (item) {
+        var row = document.createElement("div"); row.className = "app";
+        var mid = document.createElement("div"); mid.className = "mid";
+        var name = document.createElement("div"); name.className = "nm"; name.textContent = item.label || item.pkg || "—";
+        var bar = document.createElement("div"); bar.className = "bar";
+        var fill = document.createElement("i");
+        var mah = Number(String(item.mah || "0").replace(/[^0-9.]/g, "")) || 0;
+        fill.style.width = Math.max(4, Math.min(100, mah / maxMah * 100)) + "%";
+        bar.appendChild(fill);
+        var meta = document.createElement("div"); meta.className = "meta";
+        meta.textContent = fmt(item.dur) + " · " + (item.mah || "0.0") + " mAh · " + ago(item.ago);
+        mid.appendChild(name); mid.appendChild(bar); mid.appendChild(meta);
+        var val = document.createElement("div"); val.className = "val";
+        var watts = document.createElement("b"); watts.textContent = (item.w || "0.00") + " W";
+        var avg = document.createElement("span"); avg.textContent = t("appavg");
+        val.appendChild(watts); val.appendChild(avg);
+        row.appendChild(mid); row.appendChild(val); root.appendChild(row);
+      });
+    }).catch(function () {
+      var root = $("#appsList");
+      while (root.firstChild) root.removeChild(root.firstChild);
+      var empty = document.createElement("div"); empty.className = "apps-empty";
+      empty.textContent = t("appsnone"); root.appendChild(empty);
+    });
+  }
+
   /* ---------------- 数据 ---------------- */
   function load() {
     if (!MOD) return Promise.resolve();
@@ -346,6 +500,7 @@
       var j;
       try { j = JSON.parse(out); } catch (e) { throw new Error("json[" + String(out).replace(/\s+/g, " ").slice(0, 90) + "]"); }
       render(j); banner("");
+      return loadApps(false);
     }).catch(function (e) {
       banner(t("failed") + " · " + e.message);
     });
@@ -398,6 +553,7 @@
         $$(".dock button").forEach(function (x) { x.classList.toggle("on", x === b); });
         $$(".page").forEach(function (p) { p.hidden = p.id !== "p-" + b.dataset.p; });
         window.scrollTo(0, 0);
+        if (b.dataset.p === "sched") { appsAt = 0; loadApps(true); }
       });
     });
 
@@ -439,7 +595,7 @@
 
     $("#chargeNow").addEventListener("click", function () {
       if (!S || Number(S.charge.online) !== 1) { toast(t("plugfirst")); return; }
-      act("charge now on");
+      act("charge now " + (Number(S.charge.now) === 1 ? "off" : "on"));
     });
 
     $$("#langRow .mini button").forEach(function (b) {
@@ -462,8 +618,26 @@
     $$("[data-i18n]").forEach(function (el) { el.textContent = t(el.getAttribute("data-i18n")); });
     $("#langNow").textContent = lang === "zh" ? "中文" : "English";
     $$("#langRow .mini button").forEach(function (b) { b.classList.toggle("on", b.dataset.lang === lang); });
-    $("#changelog").textContent = CHANGELOG[lang];
+    renderChangelog();
+    if (MOD) loadApps(true);
     greet(); if (S) render(S);
+  }
+
+  function renderChangelog() {
+    var root = $("#changelog");
+    while (root.firstChild) root.removeChild(root.firstChild);
+    (CHANGELOG[lang] || CHANGELOG.zh).forEach(function (entry) {
+      var article = document.createElement("article"); article.className = "change-entry";
+      var title = document.createElement("h3"); title.textContent = entry.version; article.appendChild(title);
+      entry.groups.forEach(function (group) {
+        var section = document.createElement("section"); section.className = "change-group";
+        var heading = document.createElement("h4"); heading.textContent = group[0]; section.appendChild(heading);
+        var list = document.createElement("ul");
+        group[1].forEach(function (item) { var li = document.createElement("li"); li.textContent = item; list.appendChild(li); });
+        section.appendChild(list); article.appendChild(section);
+      });
+      root.appendChild(article);
+    });
   }
 
   function greet() {
