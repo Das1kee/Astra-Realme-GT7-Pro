@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # Astra — Realme GT7 Pro (RMX5010) 温控 / 电池 / 调度  核心库
-# Beta0.2.8 · Dasikee
+# Beta0.3.0 · Dasikee
 # 性能约定：status 路径里不许出现 awk/sed/grep/dumpsys，全部用内建命令
 
 ASTRA_ID=astra
@@ -71,6 +71,7 @@ CFG_SAVE_ENABLED=0
 CFG_DISABLE_GPU_BOOST=0
 CFG_DEEP_SLEEP=0
 CFG_DUAL_COMP=1
+CFG_LTPO=1
 CFG_LANG=zh
 
 cfg_load() {
@@ -96,6 +97,7 @@ cfg_load() {
 		DISABLE_GPU_BOOST) CFG_DISABLE_GPU_BOOST=${v:-0} ;;
 		DEEP_SLEEP) CFG_DEEP_SLEEP=${v:-0} ;;
 		DUAL_COMP) CFG_DUAL_COMP=${v:-1} ;;
+		LTPO_ENABLE) CFG_LTPO=${v:-1} ;;
 		LANG) CFG_LANG=${v:-zh} ;;
 		esac
 	done <"$CONF"
@@ -122,6 +124,7 @@ ST_FG_GAME=0
 ST_FG_PKG=
 ST_SCENE_TAKEOVER=0
 ST_DS_ACTIVE=0
+ST_DS_LAST=0
 ST_RADIO_LATCH=0
 ST_PROP_AT=0
 CAP_BASE=
@@ -156,6 +159,7 @@ st_load() {
 		DIS_UAH) DIS_UAH=$v ;;
 		DIS_SEC) DIS_SEC=$v ;;
 		DS_ACTIVE) ST_DS_ACTIVE=$v ;;
+		DS_LAST) ST_DS_LAST=${v:-0} ;;
 		MODEM_BAD) ST_MODEM_BAD=$v ;;
 		RADIO_LATCH) ST_RADIO_LATCH=${v:-0} ;;
 		FG_AT) FG_AT=${v:-0} ;;
@@ -191,6 +195,7 @@ st_save() { # 一次写盘
 		echo "DIS_UAH=$DIS_UAH"
 		echo "DIS_SEC=$DIS_SEC"
 		echo "DS_ACTIVE=${ST_DS_ACTIVE:-0}"
+		echo "DS_LAST=${ST_DS_LAST:-0}"
 		echo "MODEM_BAD=${ST_MODEM_BAD:-0}"
 		echo "RADIO_LATCH=${ST_RADIO_LATCH:-0}"
 		echo "FG_AT=${FG_AT:-0}"
@@ -452,7 +457,7 @@ mask_tick() {
 	period=$CFG_MASK_PERIOD; [ "$period" -lt 60 ] 2>/dev/null && period=60
 	amp=$CFG_MASK_AMP
 	half=$((period / 2))
-	pos=$(( $(date +%s) % period ))
+	pos=$(( ${TICK_NOW:-$(date +%s)} % period ))
 	[ "$pos" -gt "$half" ] && pos=$((period - pos))
 	fake=$((CFG_MASK_BASE - amp + amp * 2 * pos / half))
 	mask_on "$fake"
@@ -618,6 +623,107 @@ thermal_all_clear() { # 官方模式：确保没有任何伪装/挂载残留
 	ST_MASK_LATCH=0
 }
 
+# ---------------------------------------------------------------- LTPO 显示扩展
+# 由独立模块 GT7Pro-LTPO v2.0 融合而来：systemless bind mount 替换
+# /my_product/etc/oplus_vrr_config.json（去掉低亮度退出 LTPO 的档位、ambient、
+# hw_nit_limit），并用 resetprop -n 临时打开 persist.oplus.display.vrr。
+# 不写系统分区、不写持久属性；卸载或关闭后重启即恢复。
+LTPO_SRC="$MODDIR/.astra-ltpo/oplus_vrr_config.json"
+LTPO_TGT=/my_product/etc/oplus_vrr_config.json
+LTPO_PROP=persist.oplus.display.vrr
+LTPO_PROP_FILE=/data/property/persist.oplus.display.vrr
+ltpo_resetprop() {
+	if command -v resetprop >/dev/null 2>&1; then
+		command -v resetprop
+		return 0
+	fi
+	for _rp in /data/adb/ksu/bin/resetprop /data/adb/ap/bin/resetprop /data/adb/magisk/resetprop; do
+		[ -x "$_rp" ] && { echo "$_rp"; return 0; }
+	done
+	return 1
+}
+ltpo_mounted() { # 不 fork：扫 /proc/mounts 的目标路径
+	while read -r _dev _mnt _rest; do
+		[ "$_mnt" = "$LTPO_TGT" ] && return 0
+	done </proc/mounts
+	return 1
+}
+ltpo_prop_set() {
+	RP=$(ltpo_resetprop)
+	[ -n "$RP" ] || { log "ltpo: resetprop not found"; return 1; }
+	[ "$(getprop "$LTPO_PROP" 2>/dev/null)" = "1" ] && return 0
+	HAD=0
+	OLD=
+	if [ -f "$LTPO_PROP_FILE" ]; then
+		HAD=1
+		OLD=$(cat "$LTPO_PROP_FILE" 2>/dev/null)
+	fi
+	"$RP" -n "$LTPO_PROP" 1 2>/dev/null || { log "ltpo: set VRR prop failed"; return 1; }
+	# 防御：确认这次只改了内存属性，没有改写持久存储
+	if [ "$HAD" -eq 0 ]; then
+		[ -f "$LTPO_PROP_FILE" ] && rm -f "$LTPO_PROP_FILE" 2>/dev/null
+	else
+		NEW=$(cat "$LTPO_PROP_FILE" 2>/dev/null)
+		[ "$NEW" = "$OLD" ] || printf '%s' "$OLD" >"$LTPO_PROP_FILE" 2>/dev/null
+	fi
+	return 0
+}
+ltpo_prop_restore() {
+	RP=$(ltpo_resetprop)
+	[ -n "$RP" ] || return 0
+	if [ -f "$LTPO_PROP_FILE" ]; then
+		OLD=$(cat "$LTPO_PROP_FILE" 2>/dev/null)
+		if [ -n "$OLD" ]; then
+			"$RP" -n "$LTPO_PROP" "$OLD" 2>/dev/null
+		else
+			"$RP" -n --delete "$LTPO_PROP" 2>/dev/null
+		fi
+	else
+		"$RP" -n --delete "$LTPO_PROP" 2>/dev/null
+	fi
+}
+ltpo_sync_attrs() { # 让源文件拥有目标文件的权限/属主/SELinux context
+	[ -f "$LTPO_TGT" ] && [ -f "$LTPO_SRC" ] || return 1
+	PERM=$(stat -c '%a' "$LTPO_TGT" 2>/dev/null)
+	[ -n "$PERM" ] && chmod "$PERM" "$LTPO_SRC" 2>/dev/null
+	OWNER=$(stat -c '%u:%g' "$LTPO_TGT" 2>/dev/null)
+	[ -n "$OWNER" ] && chown "$OWNER" "$LTPO_SRC" 2>/dev/null
+	if command -v chcon >/dev/null 2>&1; then
+		CTX=$(ls -Z "$LTPO_TGT" 2>/dev/null | awk '{print $1}')
+		[ -n "$CTX" ] && [ "$CTX" != "?" ] && chcon "$CTX" "$LTPO_SRC" 2>/dev/null
+	fi
+	return 0
+}
+ltpo_apply() { # 属性 + bind mount（CFG_LTPO=1 时才做，幂等）
+	[ "$CFG_LTPO" = "1" ] || return 0
+	[ -s "$LTPO_SRC" ] || { log "ltpo: payload missing ($LTPO_SRC)"; return 1; }
+	[ -f "$LTPO_TGT" ] || { log "ltpo: target missing ($LTPO_TGT)"; return 1; }
+	ltpo_prop_set
+	ltpo_mounted && return 0
+	ltpo_sync_attrs
+	if mount --bind "$LTPO_SRC" "$LTPO_TGT" 2>/dev/null; then
+		log "ltpo: display config mounted"
+		return 0
+	fi
+	log "ltpo: bind mount failed"
+	return 1
+}
+ltpo_remove() {
+	if ltpo_mounted; then
+		umount "$LTPO_TGT" 2>/dev/null || umount -l "$LTPO_TGT" 2>/dev/null
+		log "ltpo: display config unmounted"
+	fi
+	ltpo_prop_restore
+}
+LTPO_CHECK_AT=0
+ltpo_tick() { # 每 60 秒补齐一次（挂载丢失 / 属性被系统覆盖）
+	[ "$CFG_LTPO" = "1" ] || return 0
+	now=${TICK_NOW:-$(date +%s)}
+	[ $((now - ${LTPO_CHECK_AT:-0})) -lt 60 ] && return 0
+	LTPO_CHECK_AT=$now
+	ltpo_apply
+}
+
 
 
 # ---------------------------------------------------------------- 充电
@@ -731,7 +837,7 @@ AVG_MA=0
 DIS_UAH=0        # 本次放电累计（µAh）
 DIS_SEC=0        # 本次放电累计时长（s）
 cc_sample() {
-	now=$(date +%s)
+	now=${TICK_NOW:-$(date +%s)}
 	cc=0
 	IFS= read -r cc <"$BATT/charge_counter" 2>/dev/null
 	case "$cc" in ''|*[!0-9]*) cc=0 ;; esac
@@ -821,7 +927,7 @@ avg_power_tick() { # 平滑的当前/平均功耗（毫瓦）
 		ST_AVG_MW=0
 		ST_AVG_AT=0
 	fi
-	now=$(date +%s)
+	now=${TICK_NOW:-$(date +%s)}
 	at=${ST_AVG_AT:-0}
 	case "$at" in ''|*[!0-9]*) at=0 ;; esac
 	[ $((now - at)) -lt 30 ] && return 0
@@ -885,7 +991,7 @@ charge_tick() {
 		ST_CHARGE_GUARD=0
 		return 0
 	fi
-	[ "$ST_CHARGE_START" = "0" ] && ST_CHARGE_START=$(date +%s)
+	[ "$ST_CHARGE_START" = "0" ] && ST_CHARGE_START=${TICK_NOW:-$(date +%s)}
 	want=0
 	[ "$CFG_CHARGE_AUTO" = "1" ] && want=1
 	[ "$CFG_CHARGE_NOW" = "1" ] && want=1
@@ -1095,8 +1201,11 @@ is_game() {
 }
 sched_tick() {
 	if [ "$CFG_SAVE_ENABLED" = "1" ]; then
-		now=$(date +%s)
-		[ $((now - ${FG_AT:-0})) -ge 10 ] && {
+		now=${TICK_NOW:-$(date +%s)}
+		scr_on=1
+		screen_on || scr_on=0
+		# 熄屏时不跑前台 dumpsys（省唤醒），保留熄屏前的游戏/Scene 判断
+		if [ "$scr_on" = "1" ] && [ $((now - ${FG_AT:-0})) -ge 10 ]; then
 			FG_AT=$now
 			p=$(foreground_pkg)
 			ST_FG_PKG=$p
@@ -1106,11 +1215,12 @@ sched_tick() {
 			if [ "$ST_FG_GAME" = "0" ] && ! is_video_pkg "$p" && screen_landscape; then
 				ST_FG_GAME=1
 			fi
-		}
+		fi
 		# 游戏 / Scene 调度接管 → 立即让出，不和官方/Scene 抢
 		if [ "$ST_FG_GAME" = "1" ] || [ "$ST_SCENE_TAKEOVER" = "1" ]; then
 			[ "$ST_SAVE_APPLIED" = "1" ] && save_off
-		else
+		elif [ "$scr_on" = "1" ] || [ "$ST_SAVE_APPLIED" != "1" ]; then
+			# 熄屏且限频已生效时不再每 tick 重写节点（每次 save_on 有几十次 fork）
 			save_on
 		fi
 	else
@@ -1130,6 +1240,11 @@ modem_guard_tick() {
 		ST_MODEM_BAD=0
 		return 0
 	fi
+	# 这个检查要 fork settings/getprop，30 秒一次足够，避免熄屏时被它反复唤醒
+	now=${TICK_NOW:-$(date +%s)}
+	elapsed=$((now - ${MG_AT:-0}))
+	[ "$elapsed" -lt 30 ] && return 0
+	MG_AT=$now
 	air=$(settings get global airplane_mode_on 2>/dev/null)
 	[ "$air" = "1" ] && { ST_MODEM_BAD=0; return 0; }
 	s=$(getprop gsm.sim.state 2>/dev/null)
@@ -1143,7 +1258,7 @@ modem_guard_tick() {
 		*[!,\ ]*) ST_OP_OK=1; ST_MODEM_BAD=0 ;;
 		*)
 			if [ "$ST_OP_OK" = "1" ]; then
-				ST_MODEM_BAD=$(( ${ST_MODEM_BAD:-0} + 4 ))
+				ST_MODEM_BAD=$(( ${ST_MODEM_BAD:-0} + elapsed ))
 			else
 				ST_MODEM_BAD=0
 			fi
@@ -1151,7 +1266,7 @@ modem_guard_tick() {
 		esac
 		;;
 	*ABSENT*)
-		[ "$ST_OP_OK" = "1" ] && ST_MODEM_BAD=$(( ${ST_MODEM_BAD:-0} + 4 )) || ST_MODEM_BAD=0
+		[ "$ST_OP_OK" = "1" ] && ST_MODEM_BAD=$(( ${ST_MODEM_BAD:-0} + elapsed )) || ST_MODEM_BAD=0
 		;;
 	*) ST_MODEM_BAD=0 ;; # Unknown during boot is not evidence that the SIM disappeared.
 	esac
@@ -1179,23 +1294,77 @@ in_call() {
 	dumpsys telephony.registry 2>/dev/null | grep -qE 'mCallState=[12]'
 }
 DS_AT=0
-deep_sleep_tick() {
-	if [ "$CFG_DEEP_SLEEP" != "1" ]; then deep_sleep_off; return 0; fi
-	if screen_on; then deep_sleep_off; return 0; fi
-	if charge_online; then deep_sleep_off; return 0; fi
-	if music_playing || in_call; then deep_sleep_off; return 0; fi
-	now=$(date +%s)
-	[ "$DS_AT" = "0" ] && { DS_AT=$now; return 0; }
-	[ $((now - DS_AT)) -lt 20 ] && return 0
+DS_CHECK_AT=0
+DS_VERIFY_AT=0
+DEEP_IDLE_WAIT=20
+DEEP_IDLE_FILE="$STATE/.doze.active"
+deep_sleep_enter() {
 	[ "$ST_DS_ACTIVE" = "1" ] && return 0
-	dumpsys deviceidle force-idle >/dev/null 2>&1
-	ST_DS_ACTIVE=1
+	if dumpsys deviceidle force-idle >/dev/null 2>&1; then
+		ST_DS_ACTIVE=1
+		ST_DS_LAST=${TICK_NOW:-$(date +%s)}
+		DS_VERIFY_AT=$ST_DS_LAST
+		: >"$DEEP_IDLE_FILE" 2>/dev/null
+		log "deep sleep: doze forced after $((ST_DS_LAST - DS_AT))s screen off"
+		st_save
+		return 0
+	fi
+	log "deep sleep: force-idle failed"
+	return 1
 }
-deep_sleep_off() {
+deep_sleep_off() { # deep_sleep_off [原因]
 	DS_AT=0
+	DS_CHECK_AT=0
+	rm -f "$DEEP_IDLE_FILE" 2>/dev/null
 	[ "$ST_DS_ACTIVE" = "1" ] || return 0
 	dumpsys deviceidle unforce >/dev/null 2>&1
 	ST_DS_ACTIVE=0
+	log "deep sleep: released${1:+ ($1)}"
+}
+deep_sleep_tick() {
+	if [ "$CFG_DEEP_SLEEP" != "1" ]; then
+		deep_sleep_off "disabled"
+		return 0
+	fi
+	# 熄屏/充电用 sysfs 判断，代价极低，每 tick 都做
+	if screen_on; then
+		deep_sleep_off "screen on"
+		return 0
+	fi
+	if charge_online; then
+		deep_sleep_off "charging"
+		return 0
+	fi
+	now=${TICK_NOW:-$(date +%s)}
+	# 音乐/通话检查节流：倒计时阶段 15 秒一次，进入 Doze 后 60 秒一次。
+	# 这两个 dumpsys 很贵，之前每 4 秒跑一次，会把 Doze 省下的电又吃回去。
+	_chk=15
+	[ "$ST_DS_ACTIVE" = "1" ] && _chk=60
+	if [ $((now - ${DS_CHECK_AT:-0})) -ge "$_chk" ]; then
+		DS_CHECK_AT=$now
+		if music_playing || in_call; then
+			deep_sleep_off "music/call"
+			return 0
+		fi
+	fi
+	if [ "$ST_DS_ACTIVE" = "1" ]; then
+		# 每 5 分钟确认强制 idle 还在（部分系统服务会把它顶掉）
+		if [ $((now - ${DS_VERIFY_AT:-0})) -ge 300 ]; then
+			DS_VERIFY_AT=$now
+			case "$(dumpsys deviceidle 2>/dev/null | grep -m1 -o 'mState=[A-Z_]*')" in
+			mState=IDLE*|mState=IDLE_MAINTENANCE*) : ;;
+			*)
+				log "deep sleep: doze state lost, re-forcing"
+				ST_DS_ACTIVE=0
+				deep_sleep_enter
+				;;
+			esac
+		fi
+		return 0
+	fi
+	[ "$DS_AT" = "0" ] && { DS_AT=$now; return 0; }
+	[ $((now - DS_AT)) -lt "$DEEP_IDLE_WAIT" ] && return 0
+	deep_sleep_enter
 }
 
 # ---------------------------------------------------------------- 使用统计（Scene 式自采样）
@@ -1213,7 +1382,7 @@ screen_on() {
 	return 0
 }
 usage_sample() {
-	now=$(date +%s)
+	now=${TICK_NOW:-$(date +%s)}
 	last_at=${ST_USAGE_AT:-0}
 	case "$last_at" in ''|*[!0-9]*) last_at=0 ;; esac
 	[ $((now - last_at)) -lt 30 ] && return 0
@@ -1262,33 +1431,39 @@ usage_sample() {
 
 # ---------------------------------------------------------------- 统一 tick
 tick() {
+	# 每轮只取一次时间，内部函数共用（少 5-6 次 date fork）
+	TICK_NOW=$(date +%s)
 	cfg_load
 	st_load
-	ensure_zone_cache
-	if mode_lock_acquire; then
-		# The WebUI and daemon share one mode transaction. Reload after locking so a
-		# stale daemon read cannot immediately undo a just-committed user selection.
-		cfg_load
-		st_load
-		case "$CFG_THERMAL_MODE" in
-		mask)
-			[ "$ST_THERMAL_OFF" = "1" ] && thermal_off_off
-			mask_tick
-			;;
-		off)
-			[ "$ST_MASK_ACTIVE" = "1" ] && mask_off
-			thermal_off_keep
-			;;
-		*)
-			[ "$ST_THERMAL_OFF" = "1" ] && thermal_off_off
-			[ "$ST_MASK_ACTIVE" = "1" ] && mask_off
-			;;
-		esac
-		# 清理旧版本可能残留的 Scene 假温度挂载。
-		[ "$CFG_SCENE_SEES_FAKE" = "1" ] || scene_spoof_off
-		modem_guard_tick
-		st_save
-		mode_lock_release
+	# 官方温控 + 熄屏：热区缓存只用于显示/伪装，没必要每轮校验（省 ~20 次读）
+	if [ "$CFG_THERMAL_MODE" != "official" ] || screen_on; then
+		ensure_zone_cache
+	fi
+	# 官方温控且没有任何待还原状态时，不需要拿锁做串行（省掉每 tick 的 mkdir/rmdir）
+	if [ "$CFG_THERMAL_MODE" != "official" ] || [ "$ST_MASK_ACTIVE" = "1" ] || [ "$ST_THERMAL_OFF" = "1" ]; then
+		if mode_lock_acquire; then
+			# The WebUI and daemon share one mode transaction. Reload after locking so a
+			# stale daemon read cannot immediately undo a just-committed user selection.
+			cfg_load
+			st_load
+			case "$CFG_THERMAL_MODE" in
+			mask)
+				[ "$ST_THERMAL_OFF" = "1" ] && thermal_off_off
+				mask_tick
+				;;
+			off)
+				[ "$ST_MASK_ACTIVE" = "1" ] && mask_off
+				thermal_off_keep
+				;;
+			*)
+				[ "$ST_THERMAL_OFF" = "1" ] && thermal_off_off
+				[ "$ST_MASK_ACTIVE" = "1" ] && mask_off
+				;;
+			esac
+			modem_guard_tick
+			st_save
+			mode_lock_release
+		fi
 	fi
 	cfg_load
 	st_load
@@ -1299,22 +1474,38 @@ tick() {
 	avg_power_tick
 	sched_tick
 	deep_sleep_tick
+	ltpo_tick
 	[ -f "$DEV_CACHE" ] || cache_device
 	usage_sample
 	update_prop
-	st_save
+	# Doze 期间状态基本不变，5 分钟落一次盘即可；状态切换时 deep_sleep_* 会主动写
+	if [ "$ST_DS_ACTIVE" = "1" ]; then
+		ST_SAVE_N=$(( ${ST_SAVE_N:-0} + 1 ))
+		if [ "$ST_SAVE_N" -ge 30 ]; then
+			ST_SAVE_N=0
+			st_save
+		fi
+	else
+		ST_SAVE_N=0
+		st_save
+	fi
 }
-update_prop() {
-	now=$(date +%s)
-	[ $((now - ST_PROP_AT)) -lt 30 ] && return 0
+update_prop() { # module.prop 描述只放“功能状态快捷查看”，不再写模块介绍
+	now=${TICK_NOW:-$(date +%s)}
+	[ $((now - ${ST_PROP_AT:-0})) -lt 300 ] && return 0
 	ST_PROP_AT=$now
 	case "$CFG_THERMAL_MODE" in
-	mask) tw="伪装温控" ;;
+	mask) tw="伪装" ;;
 	off) tw="去温控" ;;
-	*) tw="官方温控" ;;
+	*) tw="官方" ;;
 	esac
-	[ "$ST_CHARGE_APPLIED" = "1" ] && cw="已解除模块限流" || cw="官方"
-	[ "$CFG_SAVE_ENABLED" = "1" ] && sw="限频中" || sw="关"
-	sed -i "s@^description=.*@description=为Realme GT7 Pro定制的模块，功能为温控·电池·调度相关。私人定制切勿分享。当前状态：运行中 / 温控 $tw / 充电 $cw / 调度 $sw@" \
+	[ "$ST_CHARGE_APPLIED" = "1" ] && cw="已解除限流" || cw="官方"
+	if [ "$CFG_SAVE_ENABLED" = "1" ]; then
+		if [ "$ST_SAVE_APPLIED" = "1" ]; then sw="限频中"; else sw="限频(未生效)"; fi
+	else
+		sw="关"
+	fi
+	# 模块页描述只保留三项功能状态（用户要求）
+	sed -i "s@^description=.*@description=温控 $tw · 充电 $cw · 调度 $sw@" \
 		"$MODDIR/module.prop" 2>/dev/null
 }

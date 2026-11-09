@@ -74,10 +74,21 @@ log "daemon start mode=$CFG_THERMAL_MODE safe=$SAFE"
 # 100℃ trip，被写成 30100 后固件一直按过温处理，直接掉信号）。开机全量清一次。
 emu_clear_all
 log "cleared thermal emulation leftovers on all zones"
+# 清掉旧版本可能残留的 Scene 假温度挂载（原来每 tick 都查，现在只在启动时查一次）
+[ "$CFG_SCENE_SEES_FAKE" = "1" ] || scene_spoof_off
+# 上一轮如果停在 Doze，标记文件不应影响本次轮询节奏
+rm -f "$STATE/.doze.active" 2>/dev/null
+# LTPO 显示扩展：post-fs-data 已挂载/设属性，这里幂等补齐一次
+ltpo_apply
 while :; do
 	[ -d "$MODDIR" ] || break
 	tick
-	sleep 4
+	# 进入 Doze 后放慢轮询（10s），减少唤醒；熄屏但未进入 Doze 仍保持 4s
+	if [ -f "$STATE/.doze.active" ]; then
+		sleep 10
+	else
+		sleep 4
+	fi
 done
 log "daemon exit"
 rm -f "$STATE/daemon.pid"

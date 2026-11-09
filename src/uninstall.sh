@@ -78,4 +78,7 @@ for d in /sys/class/devfreq/*; do
 	break
 done
 
+# LTPO 显示扩展：解除配置挂载并恢复 VRR 属性
+ltpo_remove
+
 rm -rf /data/adb/Astra 2>/dev/null

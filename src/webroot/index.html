@@ -135,7 +135,7 @@
       </div>
       <div class="hint indent" id="gpuHint"></div>
       <div class="switchrow" data-k="DEEP_SLEEP">
-        <div><div class="t" data-i18n="deep">深度睡眠</div><div class="s" data-i18n="deep_s">锁屏后进入深度睡眠，降低待机耗电；音乐/通话/通知保持，亮屏或充电立即解除</div></div>
+        <div><div class="t" data-i18n="deep">深度睡眠</div><div class="s" data-i18n="deep_s">锁屏 20 秒进入 Android Doze，减少后台唤醒；亮屏、充电、通话或音乐时保持在线</div></div>
         <i class="sw" id="deepsw"></i>
       </div>
       <div class="hint indent" id="deepHint"></div>
@@ -162,6 +162,14 @@
       <div class="devrow"><span data-i18n="rom">系统</span><b id="dRom">—</b></div>
       <div class="devrow"><span data-i18n="kernel">内核</span><b id="dKernel">—</b></div>
       <div class="devrow"><span>Root</span><b id="dRoot">—</b></div>
+    </div>
+
+    <div class="card">
+      <div class="switchrow" data-k="LTPO_ENABLE">
+        <div><div class="t" data-i18n="ltpo">LTPO 全场景</div><div class="s" data-i18n="ltpo_s">允许全场景启用 LTPO / 全亮度 VRR；systemless 替换显示配置，重启后生效</div></div>
+        <i class="sw"></i>
+      </div>
+      <div class="hint" id="ltpoHint"></div>
     </div>
 
     <div class="card">

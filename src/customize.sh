@@ -74,13 +74,101 @@ else
 	ui_print "  Thermal strategy files ready: $PATCH_COUNT"
 fi
 
+# ---- LTPO 显示扩展（融合自 GT7Pro-LTPO v2.0）----
+# 新安装时用音量键询问；已有选择（升级/重装）保持不变。
+# 音量上键 = 启用；音量下键 = 跳过；10 秒无操作默认启用。
+ltpo_cfg_set() {
+	_cfg=/data/adb/Astra/config.conf
+	if grep -q "^$1=" "$_cfg" 2>/dev/null; then
+		sed -i "s@^$1=.*@$1=$2@" "$_cfg" 2>/dev/null
+	else
+		echo "$1=$2" >>"$_cfg" 2>/dev/null
+	fi
+}
+LTPO_CFG=/data/adb/Astra/config.conf
+LTPO_PAYLOAD="$MODPATH/.astra-ltpo/oplus_vrr_config.json"
+LTPO_TARGET=/my_product/etc/oplus_vrr_config.json
+mkdir -p /data/adb/Astra 2>/dev/null
+# 先读出“用户上次的选择”，再补默认配置；否则默认值里的 LTPO_ENABLE 会被当成
+# 已有选择，导致新安装永远不询问。
+LTPO_OLD=""
+if [ -f "$LTPO_CFG" ]; then
+	LTPO_OLD=$(sed -n 's/^LTPO_ENABLE=//p' "$LTPO_CFG" 2>/dev/null | head -1)
+fi
+if [ ! -f "$LTPO_CFG" ]; then
+	cp -f "$MODPATH/config/defaults.conf" "$LTPO_CFG" 2>/dev/null
+	chmod 0600 "$LTPO_CFG" 2>/dev/null
+fi
+
+if [ -d /data/adb/modules/GT7PROLTPOEnhance ] && [ -f /data/adb/modules/GT7PROLTPOEnhance/module.prop ]; then
+	ui_print "  ! Standalone GT7PROLTPOEnhance detected."
+	ui_print "  ! Uninstall it and reboot so only Astra mounts the display config."
+fi
+
+LTPO_OK=1
+[ -s "$LTPO_PAYLOAD" ] || LTPO_OK=0
+[ -f "$LTPO_TARGET" ] || LTPO_OK=0
+[ "$LTPO_OK" = "1" ] || ui_print "  ! LTPO 组件或目标配置缺失，已关闭该扩展"
+
+case "$LTPO_OLD" in
+0|1)
+	if [ "$LTPO_OK" = "1" ]; then
+		if [ "$LTPO_OLD" = "1" ]; then
+			ui_print "  LTPO 扩展：沿用上次选择（已启用）"
+		else
+			ui_print "  LTPO 扩展：沿用上次选择（未启用）"
+		fi
+	else
+		ltpo_cfg_set LTPO_ENABLE 0
+	fi
+	;;
+*)
+	if [ "$LTPO_OK" != "1" ]; then
+		ltpo_cfg_set LTPO_ENABLE 0
+	else
+		ui_print " "
+		ui_print "  =========================================="
+		ui_print "   是否加载 Realme GT7 Pro 的 LTPO 扩展？"
+		ui_print "   允许全场景启用 LTPO（全亮度 VRR）"
+		ui_print " "
+		ui_print "   音量上键 = 启用"
+		ui_print "   音量下键 = 跳过"
+		ui_print "   10 秒内无操作 = 默认启用"
+		ui_print "  =========================================="
+		LTPO_PICK=""
+		if ! command -v getevent >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
+			LTPO_PICK=1
+			ui_print "  （按键读取不可用，默认启用）"
+		else
+			LTPO_END=$(( $(date +%s) + 10 ))
+			while :; do
+				LTPO_LEFT=$(( LTPO_END - $(date +%s) ))
+				[ "$LTPO_LEFT" -le 0 ] && break
+				LTPO_EV=$(timeout "$LTPO_LEFT" getevent -qlc 1 2>/dev/null)
+				case "$LTPO_EV" in
+				*KEY_VOLUMEUP*) LTPO_PICK=1; break ;;
+				*KEY_VOLUMEDOWN*) LTPO_PICK=0; break ;;
+				esac
+			done
+		fi
+		case "$LTPO_PICK" in
+		0) ui_print "  LTPO 扩展：已跳过（音量下键）" ;;
+		1) ui_print "  LTPO 扩展：已启用（音量上键）" ;;
+		*) LTPO_PICK=1; ui_print "  LTPO 扩展：已启用（10 秒无操作，默认启用）" ;;
+		esac
+		ltpo_cfg_set LTPO_ENABLE "$LTPO_PICK"
+	fi
+	;;
+esac
+
 # Install-time work is limited to module files and diagnostic defaults.
 # Runtime properties and service state are changed only when GT mode is enabled.
 mkdir -p /data/adb/Astra/logs /data/adb/Astra/settings /data/adb/Astra/tmp /sdcard/Astra 2>/dev/null
 [ -f /data/adb/Astra/settings/games.list ] || \
 	cp -f "$MODPATH/config/games.list" /data/adb/Astra/settings/games.list 2>/dev/null
-printf '[%s] install version=%s model=%s thermal_tables=%s\n' \
+printf '[%s] install version=%s model=%s thermal_tables=%s ltpo=%s\n' \
 	"$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" "$A_VER" "${A_MODEL:-unknown}" "$PATCH_COUNT" \
+	"$(sed -n 's/^LTPO_ENABLE=//p' "$LTPO_CFG" 2>/dev/null | head -1)" \
 	>>/data/adb/Astra/logs/install.log 2>/dev/null
 
 chown -R 0:0 "$MODPATH" 2>/dev/null
@@ -89,9 +177,11 @@ find "$MODPATH" -type f -exec chmod 0644 {} + 2>/dev/null
 chmod 0755 "$MODPATH/bin/astra" "$MODPATH/service.sh" "$MODPATH/post-fs-data.sh" \
 	"$MODPATH/uninstall.sh" "$MODPATH/action.sh" "$MODPATH/customize.sh" 2>/dev/null
 chcon -R u:object_r:vendor_configs_file:s0 "$MODPATH/.astra-thermal-patches" 2>/dev/null
+chmod 0644 "$MODPATH/.astra-ltpo/oplus_vrr_config.json" 2>/dev/null
 
 ui_print " "
 ui_print "  Install complete. Reboot, then enable Astra in SukiSU."
+ui_print "  LTPO 扩展：$(sed -n 's/^LTPO_ENABLE=//p' "$LTPO_CFG" 2>/dev/null | head -1)（1=启用，0=关闭；可在 WebUI 切换）"
 ui_print "  GT去温控 changes only validated game thermal strategy tables."
 ui_print "  Battery, camera, radio and hardware over-temperature protections remain active."
 ui_print "  Uninstall from the manager and reboot to restore runtime changes."

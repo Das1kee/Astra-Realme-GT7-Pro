@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Astra CLI / WebUI 后端  Beta0.2.8
+# Astra CLI / WebUI 后端  Beta0.3.0
 ASTRA_MODDIR=${ASTRA_MODDIR:-$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)}
 . "$ASTRA_MODDIR/bin/lib.sh"
 
@@ -157,11 +157,18 @@ do_status() {
 	num "$CFG_DEEP_SLEEP"; n_deep=$NB
 	num "$CFG_DUAL_COMP"; n_dual=$NB
 	num "$ST_DS_ACTIVE"; n_dsa=$NB
+	num "$ST_DS_LAST"; n_dsl=$NB
 	num "$ST_FG_GAME"; n_game=$NB
 	num "$little"; n_l=$NB
 	num "$prime"; n_p=$NB
 	num "$ST_RADIO_LATCH"; n_radio=$NB
 	num "$cpmw"; n_cpmw=$NB
+	num "$CFG_LTPO"; n_ltpo=$NB
+	ltpo_m=0
+	ltpo_mounted && ltpo_m=1
+	ltpo_p=0
+	[ -s "$LTPO_SRC" ] && ltpo_p=1
+	vrr=$(getprop "$LTPO_PROP" 2>/dev/null)
 
 	# 单行输出：某些 root 桥接（libsu fastCmd）只取第一行，必须压成一行
 	cat <<EOF | tr -d '\n'
@@ -173,8 +180,9 @@ do_status() {
 "charge":{"online":$online,"status":"$st","watts":$n_cpmw,"avg":$avgw,"cur":$curw,"elapsed":$el,
  "temp":$n_rb,"capacity":$cap,"health":"$hl","cycle":$cy,"remain":$remain,
  "full":$cf,"design":$cd,"auto":$n_ca,"now":$n_cn,"applied":$n_capp,"guard":$n_cg,"cut":$n_cut},
+"display":{"ltpo":$n_ltpo,"mounted":$ltpo_m,"vrr":"$vrr","payload":$ltpo_p},
 "sched":{"save":$n_save,"save_applied":$n_save_applied,"gpu":$n_gpu,"gpu_forced":$gpu_forced,"gpu_state":"${ST_GPU_STATE:-unknown}","game":$n_game,
- "scene":$(num "${ST_SCENE_TAKEOVER:-0}"; echo $NB),"deep":$n_deep,"dsactive":$n_dsa,"dual":$n_dual,
+ "scene":$(num "${ST_SCENE_TAKEOVER:-0}"; echo $NB),"deep":$n_deep,"dsactive":$n_dsa,"dslast":$n_dsl,"dual":$n_dual,
  "little":$n_l,"prime":$n_p},
 "lang":"$CFG_LANG"}
 EOF
@@ -317,6 +325,9 @@ report)
 			IFS= read -r a <"$p/scaling_max_freq"; IFS= read -r b <"$p/cpuinfo_max_freq"; echo "$p $a/$b"; done
 		echo "== gpu =="; for d in /sys/class/devfreq/*; do echo "$d min=$(cat $d/min_freq 2>/dev/null) max=$(cat $d/max_freq 2>/dev/null)"; done
 		for d in /sys/class/kgsl/kgsl-3d0 /sys/class/kgsl/*; do [ -e "$d/dcvs_boost" ] && echo "dcvs_boost=$d/dcvs_boost:$(cat "$d/dcvs_boost" 2>/dev/null)"; done
+		echo "== doze =="
+		echo "deep_sleep=${CFG_DEEP_SLEEP} dsactive=${ST_DS_ACTIVE:-0} dslast=${ST_DS_LAST:-0} doze_marker=$([ -f "$STATE/.doze.active" ] && echo 1 || echo 0)"
+		dumpsys deviceidle 2>/dev/null | grep -E 'mState=|mLightState=|mForceIdle=|mScreenOn=|mCharging=' | head -6
 		echo "== recent log =="; tail -n 150 "$LOGS/astra.log" 2>/dev/null
 		[ -f "$LOGS/astra.log.1" ] && { echo "== previous log =="; tail -n 50 "$LOGS/astra.log.1"; }
 	} >"$out" 2>&1
@@ -350,16 +361,23 @@ selftest)
 	echo "$out"
 	;;
 set)
-	k="$2"; v="$3"
-	cfg_set "$k" "$v"; cfg_load; st_load
-	case "$k" in
+	# cfg_set/cfg_load 内部会用 k/v 作为临时变量，这里先存一份，
+	# 否则下面 case 匹配到的是配置文件最后一行的键名（旧 bug：开关要等守护进程下一轮才生效）
+	_k="$2"; _v="$3"
+	cfg_set "$_k" "$_v"; cfg_load; st_load
+	case "$_k" in
 	CHARGE_AUTO|CHARGE_NOW|CHARGE_TEMP_CUT) charge_tick ;;
 	SAVE_ENABLED|DISABLE_GPU_BOOST) sched_tick ;;
 	DEEP_SLEEP) deep_sleep_tick ;;
 	DUAL_COMP) : ;;
+	LTPO_ENABLE)
+		if [ "$CFG_LTPO" = "1" ]; then ltpo_apply; else ltpo_remove; fi
+		;;
 	SCENE_SEES_FAKE|MASK_BASE|MASK_AMP) [ "$ST_MASK_ACTIVE" = "1" ] && mask_tick ;;
 	esac
 	st_save
+	ST_PROP_AT=0
+	update_prop
 	do_status
 	;;
 thermal)
@@ -376,6 +394,8 @@ thermal)
 	official) thermal_all_clear ;;
 	esac
 	st_save
+	ST_PROP_AT=0
+	update_prop
 	mode_lock_release
 	do_status
 	;;
@@ -385,7 +405,7 @@ charge)
 	now) [ "${3:-on}" = "on" ] && cfg_set CHARGE_NOW 1 || cfg_set CHARGE_NOW 0 ;;
 	auto) [ "${3:-on}" = "on" ] && cfg_set CHARGE_AUTO 1 || cfg_set CHARGE_AUTO 0 ;;
 	esac
-	cfg_load; charge_tick; st_save; do_status
+	cfg_load; charge_tick; st_save; ST_PROP_AT=0; update_prop; do_status
 	;;
 sched)
 	cfg_load; st_load
@@ -402,7 +422,7 @@ sched)
 	gpu) [ "${3:-on}" = "on" ] && cfg_set DISABLE_GPU_BOOST 1 || cfg_set DISABLE_GPU_BOOST 0 ;;
 	deep) [ "${3:-on}" = "on" ] && cfg_set DEEP_SLEEP 1 || cfg_set DEEP_SLEEP 0 ;;
 	esac
-	cfg_load; sched_tick; deep_sleep_tick; st_save; do_status
+	cfg_load; sched_tick; deep_sleep_tick; st_save; ST_PROP_AT=0; update_prop; do_status
 	;;
 log) tail -n "${2:-150}" "$LOGS/astra.log" 2>/dev/null ;;
 zones) ensure_zone_cache; cat "$ZONE_SPOOF" "$ZONE_BATTERY" "$ZONE_WITNESS" ;;

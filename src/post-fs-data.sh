@@ -1,5 +1,6 @@
 #!/system/bin/sh
-# Astra post-fs-data —— 只做准备工作，绝不在这里挂载/改热区（避免开机早期把射频/温控服务打崩）
+# Astra post-fs-data —— 只做准备工作，绝不在这里挂载/改温控热区（避免开机早期把射频/温控服务打崩）
+# 例外：LTPO 显示配置需要在显示栈初始化前挂载（与独立 LTPO 模块同样的 systemless 方案）
 MODDIR=${0%/*}
 STATE=/data/adb/Astra
 mkdir -p "$STATE/logs" "$STATE/settings" "$STATE/tmp" 2>/dev/null
@@ -13,6 +14,12 @@ rm -rf "$STATE/.thermal-mode.lock" 2>/dev/null
 	chmod 0600 "$STATE/config.conf" 2>/dev/null
 }
 [ -f "$STATE/settings/games.list" ] || cp -f "$MODDIR/config/games.list" "$STATE/settings/games.list" 2>/dev/null
+
+# ---- LTPO 显示扩展（安装时音量键选择，默认启用）----
+ASTRA_MODDIR="$MODDIR"
+. "$MODDIR/bin/lib.sh"
+cfg_load
+ltpo_apply
 
 # ---- 启动计数：只做提示，绝不擅自改用户设置 ----
 # 上一轮如果活过了 3 分钟（daemon 会写 boot_ok），说明不是坏启动，清空计数

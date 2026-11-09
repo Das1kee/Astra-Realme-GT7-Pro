@@ -1,4 +1,4 @@
-/* Astra WebUI  Beta0.2.8
+/* Astra WebUI  Beta0.3.0
  * 桥接层兼容 KernelSU / SukiSU / MMRL 的三种 exec 调用形态（参考实机可用的模块写法）：
  *   1) api.exec(cmd)             → string | Promise<string|{errno,stdout}>
  *   2) api.exec(cmd, cb)         → cb(errno, stdout, stderr)
@@ -43,8 +43,10 @@
       autot: "每次充电请求解除模块限流", autos: "只释放模块可控的限流项；充电速度仍由原厂策略决定",
       nowbtn: "本次充电请求解除模块限流", nowoff: "取消本次充电请求",
       cut: "温度保护线", cuth: "到达保护线或电量 90% 自动交还官方充电策略。",
-      deep: "深度睡眠", deep_s: "锁屏后进入 Android Doze 降低待机耗电；白名单应用按系统规则运行，亮屏或充电立即解除",
-      deep_on: "已进入深度睡眠", deep_off: "待机中，未进入深度睡眠",
+      deep: "深度睡眠", deep_s: "锁屏 20 秒进入 Android Doze，减少后台唤醒；亮屏、充电、通话或音乐时保持在线",
+      deep_on: "深度睡眠中（Doze）", deep_off: "未启用", deep_ready: "已启用：锁屏 20 秒后进入 Doze", deep_last: "最近进入：",
+      ltpo: "LTPO 全场景", ltpo_s: "允许全场景启用 LTPO / 全亮度 VRR；systemless 替换显示配置，重启后生效",
+      ltpo_live: "已生效", ltpo_pending: "已启用，重启后生效", ltpo_off: "未启用",
       bit_hint: "电池详情（剩余电量 / 健康度 / 循环 / 容量曲线）将在 Astra App 提供。",
       remain: "剩余电量", percent: "电量百分比", health: "电池健康", design: "设计容量",
       fullcap: "满充容量", cycle: "循环次数",
@@ -95,8 +97,10 @@
       autot: "Request limit release on every charge", autos: "Releases only limits controlled by Astra; OEM policy still sets the rate",
       nowbtn: "Request limit release this charge", nowoff: "Cancel this charge request",
       cut: "Temperature guard", cuth: "Reverts at the guard temperature or 90% charge.",
-      deep: "Deep sleep", deep_s: "Enter Android Doze after screen-off to reduce idle drain; apps follow system whitelist rules. Screen-on or charging exits it.",
-      deep_on: "In deep sleep", deep_off: "Idle, not in deep sleep",
+      deep: "Deep sleep", deep_s: "Enters Android Doze 20 s after screen-off to cut background wakeups; stays online while the screen is on, charging, on a call or playing music",
+      deep_on: "Deep sleep (Doze) active", deep_off: "Disabled", deep_ready: "Enabled: Doze starts 20 s after screen-off", deep_last: "Last entered: ",
+      ltpo: "Full-scene LTPO", ltpo_s: "Enable LTPO / full-brightness VRR in every scene; systemless display-config swap, applies after reboot",
+      ltpo_live: "Active", ltpo_pending: "Enabled — applies after reboot", ltpo_off: "Disabled",
       bit_hint: "Battery details (remaining / health / cycles / curve) arrive with the Astra App.",
       remain: "Remaining", percent: "Level", health: "Health", design: "Design",
       fullcap: "Full charge", cycle: "Cycles",
@@ -124,6 +128,29 @@
   };
   var CHANGELOG = {
     zh: [
+      { version: "Beta0.3.0", groups: [
+        ["修复", [
+          "深度睡眠：进入 Doze 后不再每 4 秒跑 media_session / telephony dumpsys（这两个检查本身会把 CPU 反复唤醒，把 Doze 省下的电又吃回去），改为倒计时 15 秒、进入后 60 秒一次。",
+          "深度睡眠：熄屏时跳过前台应用检测、掉信号保护降到 30 秒一次、模块状态刷新降到 5 分钟，明显减少守护进程唤醒。",
+          "深度睡眠：进入 Doze 后轮询放慢到 10 秒；每 5 分钟确认强制 idle 是否还在，被系统顶掉会自动重新强制；新增进入/退出日志与 debug 报告 doze 段。",
+          "界面：深度睡眠提示改为“已启用：锁屏 20 秒后进入 Doze · 最近进入 X 前”，不再显示无意义的“待机中，未进入深度睡眠”。"
+        ]],
+        ["优化", [
+          "状态：SukiSU 模块页描述只保留功能快捷查看（温控 / 充电 / 调度），切换开关后立即刷新。",
+          "性能：守护进程每轮只取一次系统时间；官方温控熄屏时跳过热区缓存校验；无待还原状态时不再每轮拿模式锁。"
+        ]]
+      ]},
+      { version: "Beta0.2.9", groups: [
+        ["新增", [
+          "显示：融合 GT7Pro-LTPO v2.0 —— 全场景 LTPO / 全亮度 VRR。安装时用音量键询问（音量上=启用、音量下=跳过、10 秒无操作默认启用），也可在设置页随时开关，重启后生效。",
+          "显示：systemless bind mount 替换 /my_product/etc/oplus_vrr_config.json（去掉低亮度退出 LTPO 的档位、ambient、hw_nit_limit），resetprop -n 临时打开 VRR；不写系统分区、不写持久属性。",
+          "设置：新增「LTPO 全场景」开关与状态（已生效 / 已启用待重启 / 未启用）。"
+        ]],
+        ["修复", [
+          "显示：升级/重装时沿用上次的 LTPO 选择，不会被覆盖；独立 GT7PROLTPOEnhance 模块存在时安装器会提示卸载，避免重复挂载。",
+          "设置：修复 set 命令内部变量被配置文件覆盖，开关“立即生效”分支匹配到错误键名（以前要等守护进程下一轮）；现在各开关点按即时生效。"
+        ]]
+      ]},
       { version: "Beta0.2.8", groups: [
         ["修复", [
           "温控：温度伪装不再写 socd 热区。该热区是整摄氏度单位、带 100℃ 硬件 trip，写毫摄氏度会被固件当成 30100℃ 极端过温，触发厂商紧急保护导致掉信号（实测：开启伪装 5 秒内语音/数据全部 OUT_OF_SERVICE、运营商清空，关闭后立即恢复）。",
@@ -175,6 +202,29 @@
       { version: "Beta0.2.0", groups: [["新增", ["温控模式切换提示、策略表补丁和掉信号保护。", "电池功率自动刷新与充电控制。", "官调限频、GPU Boost 开关和深度睡眠。", "星空 WebUI 与 GitHub 入口。"]]] }
     ],
     en: [
+      { version: "Beta0.3.0", groups: [
+        ["Fixed", [
+          "Deep sleep: after Doze is forced, stop running media_session / telephony dumpsys every 4 s (those probes themselves keep waking the CPU and eat the savings); now every 15 s while counting down and every 60 s once in Doze.",
+          "Deep sleep: skip foreground-app detection while the screen is off, check the radio guard every 30 s instead of 4 s, and refresh module.prop every 5 minutes — far fewer daemon wakeups.",
+          "Deep sleep: the daemon polls every 10 s inside Doze, re-verifies the forced idle state every 5 minutes (and re-forces it if the system dropped it), and logs every enter/exit with a reason; the debug report gains a doze section.",
+          "UI: the deep-sleep hint now reads “Enabled: Doze starts 20 s after screen-off · last entered X ago” instead of the meaningless “Idle, not in deep sleep”."
+        ]],
+        ["Optimized", [
+          "Status: the SukiSU module description is now a compact status strip (thermal / charging / scheduling) and refreshes right after you toggle a switch.",
+          "Performance: the daemon takes the system time once per tick, skips thermal-zone cache validation while official and screen-off, and no longer grabs the mode lock every tick when nothing needs restoring."
+        ]]
+      ]},
+      { version: "Beta0.2.9", groups: [
+        ["Added", [
+          "Display: merged GT7Pro-LTPO v2.0 — full-scene LTPO / full-brightness VRR. The installer asks with the volume keys (VOL UP = enable, VOL DOWN = skip, no key within 10 s = enabled); the Settings page has a live switch, applied after reboot.",
+          "Display: systemless bind mount over /my_product/etc/oplus_vrr_config.json (drops the low-brightness LTPO exit steps, ambient, hw_nit_limit) plus a transient resetprop VRR flag; no system-partition or persistent-property writes.",
+          "Settings: new Full-scene LTPO switch and state (active / enabled pending reboot / disabled)."
+        ]],
+        ["Fixed", [
+          "Display: the installer keeps an existing LTPO choice on upgrade/reinstall, and warns when the standalone GT7PROLTPOEnhance module is present to avoid a double mount.",
+          "Settings: the set command's own variables were clobbered by the config file, so switch actions matched the wrong key (they used to apply on the daemon's next cycle); switches now take effect immediately."
+        ]]
+      ]},
       { version: "Beta0.2.8", groups: [
         ["Fixed", [
           "Thermal: masked temperature no longer writes the socd zone. That zone is whole-°C and has a 100 °C hardware trip, so a millidegree value reads as 30100 °C and triggers OEM emergency protection — the radio drops (reproduced: voice and data OUT_OF_SERVICE, operator cleared within 5 s of enabling the mask, recovered immediately after disabling).",
@@ -339,6 +389,7 @@
   function render(s) {
     S = s;
     var m = s.thermal.mode, mk = s.thermal.mask, ch = s.charge, sc = s.sched;
+    var dp = s.display || {};
 
     if (m === "mask") {
       $("#tmode").textContent = Number(mk.latch) ? t("fused") : t("mask");
@@ -415,7 +466,7 @@
     $("#dRoot").textContent = s.device.root;
     $("#dVer").textContent = "Astra " + s.version;
 
-    var vals = { RAISE_WALL: mk.wall, CHARGE_AUTO: ch.auto, SAVE_ENABLED: sc.save, DISABLE_GPU_BOOST: sc.gpu, DEEP_SLEEP: sc.deep };
+    var vals = { RAISE_WALL: mk.wall, CHARGE_AUTO: ch.auto, SAVE_ENABLED: sc.save, DISABLE_GPU_BOOST: sc.gpu, DEEP_SLEEP: sc.deep, LTPO_ENABLE: dp.ltpo };
     $$(".switchrow[data-k]").forEach(function (el) {
       var k = el.dataset.k, sw = $(".sw", el);
       sw.classList.toggle("on", Number(vals[k]) === 1);
@@ -425,7 +476,23 @@
         $("#gpuHint").textContent = sc.gpu_state === "failed" ? t("gpu_failed") : forced ? t("gpu_forced") : t("gpu_free");
       }
       if (k === "DEEP_SLEEP") {
-        $("#deepHint").textContent = Number(sc.dsactive) ? t("deep_on") : t("deep_off");
+        var dh = $("#deepHint");
+        if (!dh) return;
+        if (Number(vals[k]) !== 1) {
+          dh.textContent = t("deep_off");
+        } else {
+          var dsLast = Number(sc.dslast || 0);
+          var dsTxt = t("deep_ready");
+          if (dsLast > 0) dsTxt += " · " + t("deep_last") + ago(Math.floor(Date.now() / 1000) - dsLast);
+          dh.textContent = Number(sc.dsactive) === 1 ? t("deep_on") : dsTxt;
+        }
+      }
+      if (k === "LTPO_ENABLE") {
+        var lh = $("#ltpoHint");
+        if (!lh) return;
+        lh.textContent = Number(vals[k]) !== 1 ? t("ltpo_off")
+          : Number(dp.mounted) === 1 ? t("ltpo_live")
+            : t("ltpo_pending");
       }
     });
   }
